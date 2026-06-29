@@ -1,0 +1,27 @@
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; overflow: hidden; background: #87b9e6; font-family: system-ui, "Segoe UI", sans-serif; color: #fff; }
+canvas { display: block; }
+
+#loading {
+  position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+  font-size: 22px; letter-spacing: 1px; background: radial-gradient(circle at 50% 40%, #2a3b6e, #0e1430);
+  z-index: 10;
+}
+.hidden { display: none !important; }
+
+#hud { position: fixed; inset: 0; pointer-events: none; z-index: 5; }
+#stats {
+  position: absolute; top: 12px; left: 12px; font-size: 13px; line-height: 1.5;
+  background: rgba(10,14,30,.5); padding: 8px 12px; border-radius: 8px; font-variant-numeric: tabular-nums;
+  text-shadow: 0 1px 2px #000;
+}
+#help {
+  position: absolute; bottom: 12px; left: 50%; transform: translateX(-50%);
+  font-size: 13px; text-align: center; background: rgba(10,14,30,.45); padding: 8px 16px; border-radius: 10px;
+  text-shadow: 0 1px 2px #000;
+}
+#help b { color: #9fe0ff; }
+#credit {
+  position: fixed; bottom: 6px; right: 10px; z-index: 5; font-size: 11px; color: rgba(255,255,255,.6);
+  text-shadow: 0 1px 2px #000; pointer-events: none;
+}

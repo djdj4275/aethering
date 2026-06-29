@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Aethering — 3D 오픈월드 (프로토타입)</title>
+<link rel="stylesheet" href="style.css" />
+<!-- importmap: 'three' 및 애드온 bare specifier를 로컬 동봉 파일로 해석 -->
+<script type="importmap">
+{
+  "imports": {
+    "three": "./vendor/three.module.js",
+    "three/addons/loaders/GLTFLoader.js": "./vendor/jsm/loaders/GLTFLoader.js",
+    "three/addons/objects/Sky.js": "./vendor/jsm/objects/Sky.js",
+    "three/addons/postprocessing/EffectComposer.js": "./vendor/jsm/postprocessing/EffectComposer.js",
+    "three/addons/postprocessing/RenderPass.js": "./vendor/jsm/postprocessing/RenderPass.js",
+    "three/addons/postprocessing/UnrealBloomPass.js": "./vendor/jsm/postprocessing/UnrealBloomPass.js",
+    "three/addons/postprocessing/OutputPass.js": "./vendor/jsm/postprocessing/OutputPass.js",
+    "three/addons/controls/OrbitControls.js": "./vendor/jsm/controls/OrbitControls.js",
+    "three/addons/utils/SkeletonUtils.js": "./vendor/jsm/utils/SkeletonUtils.js"
+  }
+}
+</script>
+</head>
+<body>
+  <div id="loading">월드를 불러오는 중…</div>
+  <div id="hud" class="hidden">
+    <div id="stats"></div>
+    <div id="help">
+      이동 <b>W A S D</b> · 달리기 <b>Shift</b> · 점프 <b>Space</b> · 공격 <b>좌클릭</b> · 무빙기 <b>F</b>/<b>우클릭</b><br/>
+      액티브 스킬 <b>Q W E R</b> · 시점 회전 <b>마우스 드래그</b> · 줌 <b>휠</b>
+    </div>
+  </div>
+  <div id="credit">Model: RobotExpressive — Quaternius/Tomás Laulhé (CC0) · Engine: three.js (MIT)</div>
+  <script type="module" src="src/main.js"></script>
+</body>
+</html>
