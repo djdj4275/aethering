@@ -370,6 +370,10 @@ function attack() {
   const crit = Math.random() < (PSTATS.critChance || 0.2);
   const dmg = Math.round((PSTATS.dmg + (GAME.level - 1) * 2) * (crit ? 1.7 + (PSTATS.critMult || 0) : 1) * (buffT > 0 ? 2 : 1));
   if (PSTATS.atkType === "melee") {
+    // #7: 검격 호 연출(기본 베기도 화려하게) — 정면에 슬래시 스프라이트
+    const fp = player.position.clone().setY(player.position.y + 1.0)
+      .add(new THREE.Vector3(Math.sin(player.rotation.y), 0, Math.cos(player.rotation.y)).multiplyScalar(1.5));
+    spriteFlash(fp, TEX.slash, crit ? 0xfff0a0 : 0xffffff, 0.5, crit ? 2.6 : 2.1, 0.16, null, Math.random() < 0.5 ? 9 : -9);
     setTimeout(() => { if (world && !GAME.dead) world.playerAttack(dmg, crit, PSTATS.meleeReach); }, PSTATS.attackWindup);
   } else {
     const type = PSTATS.atkType, shots = 1 + (PSTATS.extraShots || 0);
@@ -1038,10 +1042,15 @@ function updateWarns(dt) {
 
 // 보스 슬램/소환·폭발 등 바닥 충격 링 + 파티클 + 흔들림
 function fxRing(pos, radius, color) {
-  const g = new THREE.Mesh(new THREE.RingGeometry(0.82, 1, 28), new THREE.MeshBasicMaterial({ color: color || 0xffaa33, transparent: true, opacity: 0.9, side: THREE.DoubleSide }));
+  const col = color || 0xffaa33;
+  const g = new THREE.Mesh(new THREE.RingGeometry(0.82, 1, 28), new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: 0.9, side: THREE.DoubleSide }));
   g.rotation.x = -Math.PI / 2; g.position.set(pos.x, terrainHeight(pos.x, pos.z) + 0.12, pos.z);
   scene.add(g); fx.push({ mesh: g, t: 0, dur: 0.5, r: radius });
-  spawnBurst(new THREE.Vector3(pos.x, terrainHeight(pos.x, pos.z) + 0.5, pos.z), color || 0xffaa33, 14, 9, 0.2, 0.55);
+  // #7: 밝은 중심 섬광 + 확장 충격파 링 + 스파크 — 공용 함수라 다수 스킬/보스가 함께 화려해짐
+  const cy = new THREE.Vector3(pos.x, terrainHeight(pos.x, pos.z) + 0.5, pos.z);
+  spriteFlash(cy, TEX.glow, col, radius * 0.5, radius * 1.3, 0.14);
+  spriteFlash(cy, TEX.ring, col, radius * 0.4, radius * 2.6, 0.5, null, 2.2);
+  spawnBurst(cy, col, 16, 10, 0.22, 0.55); spawnSparks(cy, col, 14, 10);
   addShake(0.5);
 }
 function spawnExplosion(pos, r) {
@@ -1566,18 +1575,30 @@ const ACTIVE_SKILLS = [
   { id: "a_grapplestrike", tier: "prism", cls: ARCHER, name: "강습 사격", desc: "고속 갈고리 비행 + 집중 난사", cd: 18, cast: () => { grappleShot(22 + LV() * 4, 18); } },
 ];
 function slotKey(i) { return ["1", "2", "3", "4"][i]; }
-function refreshActives() { UI.setActives(GAME.actives.map((s, i) => ({ key: slotKey(i), name: s ? s.skill.name : null, cdRatio: s ? s.cd / s.skill.cd : 0 }))); }
+function refreshActives() {
+  UI.setActives(GAME.actives.map((s, i) => s
+    ? { key: slotKey(i), name: s.skill.name + ((s.lvl || 1) > 1 ? " Lv" + s.lvl : ""), cdRatio: s.cd / _slotCd(s) }
+    : { key: slotKey(i), name: null, cdRatio: 0 }));
+}
+function _slotCd(slot) { return slot.skill.cd * Math.max(0.4, 1 - 0.08 * ((slot.lvl || 1) - 1)); }   // 조합 레벨당 쿨다운 -8%(최대 -60%)
 function castActive(i) {
   if (!GAME.started || paused || GAME.dead) return;
   const slot = GAME.actives[i];
   if (!slot || slot.cd > 0) return;
-  slot.cd = slot.skill.cd; slot.skill.cast(SKILL_API);
+  slot.cd = _slotCd(slot); slot.skill.cast(SKILL_API);
 }
 function equipSkill(sk, done) {
+  // #2 스킬 조합: 이미 장착한 스킬을 또 얻으면 새 슬롯/교체 대신 '합쳐서' 강화(쿨다운↓·레벨↑)
+  const have = GAME.actives.findIndex((s) => s && s.skill.id === sk.id);
+  if (have >= 0) {
+    const slot = GAME.actives[have]; slot.lvl = (slot.lvl || 1) + 1;
+    UI.toast("⚡ 조합! " + sk.name + " 강화 (Lv." + slot.lvl + " · 쿨다운↓)");
+    refreshActives(); done(); return;
+  }
   const free = GAME.actives.indexOf(null);
-  if (free >= 0) { GAME.actives[free] = { skill: sk, cd: 0 }; UI.toast("장착: " + sk.name + " (" + slotKey(free) + ")"); refreshActives(); done(); }
+  if (free >= 0) { GAME.actives[free] = { skill: sk, cd: 0, lvl: 1 }; UI.toast("장착: " + sk.name + " (" + slotKey(free) + ")"); refreshActives(); done(); }
   else UI.showSlotPicker(GAME.actives.map((s, i) => ({ key: slotKey(i), name: s ? s.skill.name : "비어있음" })), sk.name, (slot) => {
-    GAME.actives[slot] = { skill: sk, cd: 0 }; UI.toast("교체: " + sk.name + " (" + slotKey(slot) + ")"); refreshActives(); done();
+    GAME.actives[slot] = { skill: sk, cd: 0, lvl: 1 }; UI.toast("교체: " + sk.name + " (" + slotKey(slot) + ")"); refreshActives(); done();
   });
 }
 // 티어 희귀도 가중치(깊은 층일수록 상위 티어↑, 좋은 등급일수록 덜 나옴)
