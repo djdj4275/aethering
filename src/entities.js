@@ -15,10 +15,10 @@ const ENEMY_DEFS = {
 };
 // 보스: 층마다 순환, 각자 고유 패턴 + 고유 공격 모션
 const BOSS_DEFS = {
-  lord: { name: "해골 군주", model: "warrior", mscale: 2.0, hp: 240, dmg: 18, speed: 2.6, aggro: 200, radius: 1.7, score: 300, barY: 4.5, pattern: "slam", patterns: ["slam", "shockring", "spikes"], mob: "leap", atkClip: "2H_Melee_Attack_Chop", patClip: "2H_Melee_Attack_Spinning" },
-  archmage: { name: "해골 대마법사", model: "mage", mscale: 1.9, hp: 200, dmg: 13, speed: 2.2, aggro: 200, radius: 1.6, score: 320, barY: 4.4, pattern: "volley", patterns: ["volley", "shockring", "barrage"], mob: "blink", ranged: true, prefRange: 15, atkClip: "Spellcast_Shoot", patClip: "Spellcast_Long" },
-  reaper: { name: "해골 사신", model: "rogue", mscale: 2.0, hp: 210, dmg: 16, speed: 3.2, aggro: 200, radius: 1.6, score: 340, barY: 4.4, pattern: "charge", patterns: ["charge", "spikes", "shockring"], mob: null, atkClip: "1H_Melee_Attack_Stab", patClip: "1H_Melee_Attack_Jump_Chop" },
-  necro: { name: "강령술사", model: "minion", mscale: 2.1, hp: 230, dmg: 12, speed: 2.4, aggro: 200, radius: 1.7, score: 360, barY: 4.6, pattern: "summon", patterns: ["summon", "barrage", "spikes"], mob: "blink", atkClip: "1H_Melee_Attack_Chop", patClip: "Spellcasting" },
+  lord: { name: "해골 군주", model: "warrior", mscale: 2.0, hp: 240, dmg: 18, speed: 2.6, aggro: 200, radius: 1.7, score: 300, barY: 4.5, pattern: "slam", patterns: ["slam", "shockring", "skyfall"], mob: "leap", atkClip: "2H_Melee_Attack_Chop", patClip: "2H_Melee_Attack_Spinning" },
+  archmage: { name: "해골 대마법사", model: "mage", mscale: 1.9, hp: 200, dmg: 13, speed: 2.2, aggro: 200, radius: 1.6, score: 320, barY: 4.4, pattern: "volley", patterns: ["volley", "breath", "barrage"], mob: "blink", ranged: true, prefRange: 15, atkClip: "Spellcast_Shoot", patClip: "Spellcast_Long" },
+  reaper: { name: "해골 사신", model: "rogue", mscale: 2.0, hp: 210, dmg: 16, speed: 3.2, aggro: 200, radius: 1.6, score: 340, barY: 4.4, pattern: "charge", patterns: ["tripledash", "spikes", "shockring"], mob: null, atkClip: "1H_Melee_Attack_Stab", patClip: "1H_Melee_Attack_Jump_Chop" },
+  necro: { name: "강령술사", model: "minion", mscale: 2.1, hp: 230, dmg: 12, speed: 2.4, aggro: 200, radius: 1.7, score: 360, barY: 4.6, pattern: "summon", patterns: ["summon", "skyfall", "breath"], mob: "blink", atkClip: "1H_Melee_Attack_Chop", patClip: "Spellcasting" },
 };
 const BOSS_ORDER = ["lord", "archmage", "reaper", "necro"];
 
@@ -120,15 +120,24 @@ export function createWorld(ctx) {
     obj.position.set(x, terrainHeight(x, z) + hover, z);
     scene.add(obj);
     const bar = makeHealthBar(def.radius * 1.7); bar.position.y = def.barY; obj.add(bar);
+    // 보스 위압감(#9): 발밑 회전 오라 링(가산혼합) — 새 모델 없이 존재감↑. 월드 좌표라 update에서 추종.
+    let aura = null;
+    if (isBoss) {
+      const ac = def.tint != null ? def.tint : (tint != null ? tint : 0xff3a2a);
+      aura = new THREE.Mesh(
+        new THREE.RingGeometry(def.radius * 1.7, def.radius * 2.7, 56),
+        new THREE.MeshBasicMaterial({ color: ac, transparent: true, opacity: 0.5, side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false }));
+      aura.rotation.x = -Math.PI / 2; aura.renderOrder = 2; scene.add(aura);
+    }
     const e = {
       def, obj, anim: actionsFor(obj, M.gltf), bar, isBoss: !!isBoss,
       hp: def.hp * mult, maxHp: def.hp * mult, dmg: def.dmg * mult, score: Math.round(def.score * mult),
       ranged: !!def.ranged, prefRange: def.prefRange || 0,
       home: new THREE.Vector3(x, 0, z), atkCd: Math.random() * 1.2, dead: false, stun: 0,
       wanderT: 0, wanderDir: Math.random() * 7, moving: false, atkAnim: 0,
-      patternCd: isBoss ? 2.5 : 0, telegraph: 0, charge: 0, chargeDir: new THREE.Vector3(), chargeHit: false,
+      patternCd: isBoss ? 2.5 : 0, telegraph: 0, charge: 0, chargeDir: new THREE.Vector3(), chargeHit: false, multiDash: 0,
       mobCd: isBoss ? 5 : 0, leap: 0, leapDir: new THREE.Vector3(), leapSpeed: 0, leapHit: false,
-      zoneCd: isBoss ? 3.5 : 0, volleyAlt: false, mats: mats, flash: 0,
+      zoneCd: isBoss ? 3.5 : 0, volleyAlt: false, mats: mats, flash: 0, aura: aura, glow: isBoss ? 0.13 : 0,
       sealed: !!isBoss,   // 보스: 잡몹 처치 전까지 봉인(피해 대폭 감소)
       burn: 0, burnDps: 0, poison: 0, poisonDps: 0, poisonStk: 0, slow: 0, shock: 0, _dotAcc: 0,
       clips: M.clips || null, hover: hover,            // 모델별 클립 매핑 + 접지/부양 높이
@@ -206,6 +215,7 @@ export function createWorld(ctx) {
     if (e.anim.addAtk) e.anim.addAtk.stop();
     play(e, "death", { loop: false, fade: 0.15 });
     const idx = enemies.indexOf(e); if (idx >= 0) enemies.splice(idx, 1);
+    if (e.aura) { scene.remove(e.aura); e.aura = null; }   // 보스 오라 제거(#9)
     setTimeout(() => scene.remove(e.obj), 2500);
     if (e.isBoss) { boss = null; ctx.onBossKilled(); }
     else {
@@ -275,8 +285,40 @@ export function createWorld(ctx) {
   // ---------- 보스 고유 패턴 ----------
   function patOk(p, d) {
     if (p === "slam") return d < 11;
-    if (p === "charge") return d > 2.5 && d < 26;
-    return true;   // 원거리 패턴(shockring/volley/barrage/spikes/summon)은 거리 무관
+    if (p === "charge" || p === "tripledash") return d > 2.5 && d < 28;
+    if (p === "breath") return d < 24;
+    return true;   // 원거리 패턴(shockring/volley/barrage/spikes/summon/skyfall)은 거리 무관
+  }
+  // 돌진 시작(텔레그래프 링 + 공격모션) — charge/tripledash 공용
+  function startCharge(e) {
+    e.charge = 0.5; e.chargeHit = false;
+    playAttack(e, e.patClip || e.atkClip, 0.5);
+    e.chargeDir.subVectors(getPlayer().position, e.obj.position).setY(0).normalize();
+    ctx.fxRing(e.obj.position, 3.2, 0xff4040);   // 빨간 돌진 예고
+  }
+  // 브레스: 전방 부채꼴로 화염을 연속 분사(0.5초 텔레그래프 후)
+  function breath(e, n) {
+    playAttack(e, e.patClip || e.atkClip || "Spellcast_Shoot", 1.6);
+    ctx.fxRing(e.obj.position, 4.5, 0xff5a2a); ctx.fxRing(e.obj.position, 3, 0xffaa33);   // 예비동작
+    for (let i = 0; i < n; i++) {
+      setTimeout(() => {
+        if (e.dead) return;
+        const base = tmp.subVectors(getPlayer().position, e.obj.position).setY(0).normalize();
+        const a = Math.atan2(base.x, base.z) + (Math.random() - 0.5) * 0.55;
+        const o = e.obj.position.clone(); o.y += 1.5;
+        ctx.spawnEnemyProjectile(o, { x: Math.sin(a), y: 0.02, z: Math.cos(a) }, Math.round(e.dmg * 0.55));
+      }, 500 + i * 70);
+    }
+  }
+  // 하늘에서 떨어지는 범위기: 플레이어 주변에 경고 표식 후 시차를 두고 연쇄 낙하(걸어서 피하게)
+  function skyfall(e, n) {
+    playAttack(e, e.patClip || e.atkClip, 1.0);
+    const pc = getPlayer().position.clone();
+    for (let k = 0; k < n; k++) {
+      const a = Math.random() * Math.PI * 2, r = Math.random() * 8;
+      const x = pc.x + Math.cos(a) * r, z = pc.z + Math.sin(a) * r;
+      setTimeout(() => { if (!e.dead && ctx.bossAoE) ctx.bossAoE(new THREE.Vector3(x, terrainHeight(x, z), z), 3.2, Math.round(e.dmg * 1.3), 1.1); }, k * 220);
+    }
   }
   function bossPattern(e, dt, d) {
     if (e.telegraph > 0) { e.telegraph -= dt; if (e.telegraph <= 0) slamHit(e); return; }
@@ -287,9 +329,12 @@ export function createWorld(ctx) {
     const cdK = enr ? 0.6 : 1;
     const list = (e.def.patterns || [e.def.pattern]).filter((p) => patOk(p, d));
     const pat = list.length ? list[(Math.random() * list.length) | 0] : null;
-    if (pat === "slam") { e.patternCd = 4.5 * cdK; e.telegraph = 0.6; playAttack(e, e.patClip, 1.0); ctx.fxRing(e.obj.position, 6, 0xffcc55); }
+    if (pat === "slam") { e.patternCd = 4.5 * cdK; e.telegraph = 0.85; playAttack(e, e.patClip, 1.1); ctx.fxRing(e.obj.position, 6.5, 0xff5a2a); ctx.fxRing(e.obj.position, 4, 0xffcc55); }   // 0.85초 텔레그래프(피할 시간)
     else if (pat === "volley") { e.patternCd = 3.0 * cdK; volley(e, enr ? 7 : 5); }
-    else if (pat === "charge") { e.patternCd = 3.6 * cdK; e.charge = 0.6; e.chargeHit = false; playAttack(e, e.patClip, 0.6); e.chargeDir.subVectors(getPlayer().position, e.obj.position).setY(0).normalize(); }
+    else if (pat === "charge") { e.patternCd = 3.6 * cdK; startCharge(e); }
+    else if (pat === "tripledash") { e.patternCd = 5.0 * cdK; e.multiDash = 2; startCharge(e); }   // 3단 대쉬
+    else if (pat === "breath") { e.patternCd = 4.2 * cdK; breath(e, enr ? 18 : 14); }
+    else if (pat === "skyfall") { e.patternCd = 4.5 * cdK; skyfall(e, enr ? 9 : 6); }
     else if (pat === "summon") { e.patternCd = 6.5 * cdK; playAttack(e, e.patClip, 0.9); summon(e, enr ? 3 : 2); ctx.fxRing(e.obj.position, 3, 0x8a4fff); }
     else if (pat === "shockring") { e.patternCd = 3.4 * cdK; ringBurst(e, enr ? 16 : 11); }
     else if (pat === "barrage") { e.patternCd = 3.8 * cdK; barrage(e, enr ? 9 : 6); }
@@ -368,7 +413,9 @@ export function createWorld(ctx) {
     for (let i = 0; i < enemies.length; i++) {
       const e = enemies[i];
       e.anim.mixer.update(dt);
-      if (e.flash > 0) { e.flash -= dt; const k = Math.max(0, e.flash / 0.12) * 0.9; for (let mi = 0; mi < e.mats.length; mi++) if (e.mats[mi].emissive) e.mats[mi].emissive.setScalar(k); }
+      if (e.flash > 0) { e.flash -= dt; const k = Math.max(e.glow, Math.max(0, e.flash / 0.12) * 0.9); for (let mi = 0; mi < e.mats.length; mi++) if (e.mats[mi].emissive) e.mats[mi].emissive.setScalar(k); }
+      else if (e.glow) { for (let mi = 0; mi < e.mats.length; mi++) if (e.mats[mi].emissive) e.mats[mi].emissive.setScalar(e.glow); }   // 보스 상시 발광(#9)
+      if (e.aura) { e.aura.position.set(e.obj.position.x, terrainHeight(e.obj.position.x, e.obj.position.z) + 0.12, e.obj.position.z); e.aura.rotation.z += dt * 0.7; }
       if (e.dead) continue;
       // 상태이상: 화상/중독 지속피해 + 타이머 감소
       if (e.burn > 0 || e.poison > 0) {
@@ -433,6 +480,7 @@ export function createWorld(ctx) {
         e.charge -= dt;
         faceMove(e, e.chargeDir, 13, dt); play(e, "run");
         if (!e.chargeHit && e.obj.position.distanceTo(p.position) < 2.4) { e.chargeHit = true; ctx.onPlayerHit(Math.round(e.dmg * 1.2)); }
+        if (e.charge <= 0 && e.multiDash > 0) { e.multiDash--; startCharge(e); }   // 3단 대쉬: 끝나면 즉시 재돌진
       } else if (e.telegraph > 0) {                // 슬램 예비동작(공격 모션 유지)
         e.obj.rotation.y = Math.atan2(toP.x, toP.z);
       } else if (e.ranged) {
