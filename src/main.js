@@ -67,6 +67,38 @@ scene.add(sun);
 const ambient = new THREE.AmbientLight(0xffffff, 0);   // 폐쇄형(동굴/용암) 기본 밝기 보강용
 scene.add(ambient);
 
+// ── 투사체 조명 풀(고정 개수) ─────────────────────────────────────────────
+// 투사체마다 PointLight를 씬에 add/remove 하면 조명 개수가 바뀔 때마다 Three.js가
+// 모든 머티리얼 셰이더를 재컴파일해 프레임이 멎는다(보스 탄막 시 치명적 렉).
+// → 조명 개수를 절대 바꾸지 않도록 고정 풀을 미리 만들고, 매 프레임 가장 중요한
+//   발광 투사체들에 위치/색/밝기만 재배정한다(미사용 조명은 intensity=0).
+const LIGHT_POOL_N = 8;
+const LIGHT_POOL = [];
+for (let i = 0; i < LIGHT_POOL_N; i++) { const l = new THREE.PointLight(0xffffff, 0, 12); l.castShadow = false; scene.add(l); LIGHT_POOL.push(l); }
+const _lightCands = [];   // 매 프레임 재사용하는 후보 배열
+// projectiles/meteors에서 발광 후보를 모아 우선순위(밝기*가중)로 상위 N개에 조명 배정
+function updateProjectileLights() {
+  _lightCands.length = 0;
+  for (let i = 0; i < projectiles.length; i++) {
+    const p = projectiles[i];
+    if (!p.li) continue;                         // li = {c,i,d,w} 조명 정보
+    _lightCands.push(p);
+  }
+  for (let i = 0; i < meteors.length; i++) { const m = meteors[i]; if (m.delay > 0) continue; _lightCands.push(m); }
+  // 우선순위: 가중치 높은 것 우선(메테오/화염구 > 볼트 > 화살)
+  _lightCands.sort((a, b) => (b.li.w || 1) - (a.li.w || 1));
+  const n = Math.min(LIGHT_POOL_N, _lightCands.length);
+  for (let i = 0; i < LIGHT_POOL_N; i++) {
+    const l = LIGHT_POOL[i];
+    if (i < n) {
+      const c = _lightCands[i], li = c.li, pos = c.mesh.position;
+      l.position.set(pos.x, pos.y, pos.z);
+      l.color.setHex(li.c); l.distance = li.d || 12;
+      l.intensity = li.i * (li.flicker ? (0.85 + Math.random() * 0.35) : 1);
+    } else l.intensity = 0;
+  }
+}
+
 // ---------- 지형 높이 함수 (지형 메시 + 캐릭터 접지 공용) ----------
 const WORLD = 240;          // 지형 한 변 길이
 const WATER_Y = -1.2;
@@ -122,6 +154,7 @@ const waterMesh = new THREE.Mesh(
 waterMesh.rotation.x = -Math.PI / 2; waterMesh.position.y = WATER_Y; scene.add(waterMesh);
 
 const propGroup = new THREE.Group(); scene.add(propGroup);   // 바이옴 식생/바위(층마다 교체)
+const obstacles = [];     // 솔리드 장애물(바위/나무) — 투사체 차폐용 {x,z,r,h}
 let NP = null;            // 식생 프로토타입 모음(로드 후 채움)
 let playerLight = null;   // 동굴/용암용 플레이어 주변 광원
 const dungeon = createDungeon({ scene, terrainHeight, WORLD });   // 폐쇄형 바이옴의 벽/천장/충돌
@@ -170,8 +203,10 @@ function scatterFrom(protos, count, opts) {
     if (Math.hypot(x, z) < 11) continue;               // 마을 중심은 비워둔다
     const proto = protos[(Math.random() * protos.length) | 0];
     const m = proto.clone();
-    m.scale.multiplyScalar(proto.userData.norm * THREE.MathUtils.randFloat(sMin, sMax));
+    const rs = THREE.MathUtils.randFloat(sMin, sMax);
+    m.scale.multiplyScalar(proto.userData.norm * rs);
     m.position.set(x, y - 0.05, z);
+    if (opts.solid) obstacles.push({ x, z, r: (opts.cr || 0.8) * rs, h: (opts.ch || 6) * rs });   // 투사체 차폐 등록
     m.rotation.y = Math.random() * Math.PI * 2;
     m.traverse((o) => {
       if (!o.isMesh) return;
@@ -334,8 +369,9 @@ function attack() {
     }
     setTimeout(() => {
       if (!world || GAME.dead) return;
+      const spread = type === "fireball" ? 0.06 : 0.13;   // 화염구는 확산을 좁혀 근접 시 모두 명중
       for (let i = 0; i < shots; i++) {
-        const a = (i - (shots - 1) / 2) * 0.13, c = Math.cos(a), s = Math.sin(a);  // Y축 회전(피치 유지)
+        const a = (i - (shots - 1) / 2) * spread, c = Math.cos(a), s = Math.sin(a);  // Y축 회전(피치 유지)
         spawnProjectile(type, new THREE.Vector3(base.x * c + base.z * s, base.y, -base.x * s + base.z * c), dmg, crit);
       }
     }, PSTATS.attackWindup);
@@ -346,9 +382,18 @@ function attack() {
 function _vt(name) { const t = _texLoader.load("assets/vfx/" + name); t.colorSpace = THREE.SRGBColorSpace; return t; }
 // 밝은 중심의 글로우/링 텍스처를 캔버스로 생성(가산혼합용) — 받은 렌즈플레어는 RGB가 어두워 부적합
 function _canvasTex(draw, size) { const c = document.createElement("canvas"); c.width = c.height = size || 128; draw(c.getContext("2d")); const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t; }
-const _glowTex = _canvasTex((x) => { const g = x.createRadialGradient(64, 64, 0, 64, 64, 64); g.addColorStop(0, "rgba(255,255,255,1)"); g.addColorStop(0.18, "rgba(255,255,255,0.95)"); g.addColorStop(0.45, "rgba(255,255,255,0.35)"); g.addColorStop(1, "rgba(255,255,255,0)"); x.fillStyle = g; x.fillRect(0, 0, 128, 128); });
-const _ringTex = _canvasTex((x) => { x.strokeStyle = "rgba(255,255,255,1)"; x.lineWidth = 9; x.beginPath(); x.arc(64, 64, 52, 0, Math.PI * 2); x.stroke(); x.globalAlpha = 0.4; x.lineWidth = 18; x.stroke(); });
-const TEX = { glow: _glowTex, ring: _ringTex, spark: _glowTex, smoke: _vt("smoke.png"), disc: _glowTex };
+// 스킬/이펙트 스프라이트 — 전부 외부 CC0 소스(Kenney Particle Pack)에서 로드(런타임 생성 안 함)
+const TEX = {
+  glow:  _vt("kenney/circle_05.png"),   // 부드러운 발광(머즐/코어/트레일/원소 빛)
+  ring:  _vt("kenney/circle_04.png"),   // 충격파 링/지면 데칼
+  spark: _vt("kenney/star_08.png"),     // 타격 스파크/별 폭발
+  smoke: _vt("kenney/smoke_05.png"),    // 연기(독/그을림)
+  disc:  _vt("kenney/light_02.png"),    // 후광 디스크(파이어볼 등)
+  star:  _vt("kenney/star_06.png"),     // 반짝임
+  magic: _vt("kenney/magic_01.png"),    // 마법진(룬 데칼)
+  slash: _vt("kenney/slash_03.png"),    // 참격
+  bolt:  _vt("kenney/spark_04.png"),    // 전격/번개 크랙
+};
 function glowSprite(tex, color, size) {
   const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, color: color, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }));
   s.scale.setScalar(size); return s;
@@ -404,19 +449,11 @@ function updateTrails(dt) {
 
 // ===== 추가 연출: 마법진 데칼 / 상승 잉걸불 / 화면 섬광 =====
 // 룬 마법진 텍스처(캔버스): 이중 링 + 눈금 + 십자
-const _circleTex = _canvasTex((x) => {
-  x.translate(128, 128); x.strokeStyle = "rgba(255,255,255,1)";
-  x.lineWidth = 6; x.beginPath(); x.arc(0, 0, 116, 0, 6.283); x.stroke();
-  x.lineWidth = 3; x.beginPath(); x.arc(0, 0, 96, 0, 6.283); x.stroke();
-  x.beginPath(); x.arc(0, 0, 60, 0, 6.283); x.stroke();
-  for (let i = 0; i < 24; i++) { const a = i / 24 * 6.283; x.beginPath(); x.moveTo(Math.cos(a) * 96, Math.sin(a) * 96); x.lineTo(Math.cos(a) * 116, Math.sin(a) * 116); x.stroke(); }
-  for (let i = 0; i < 3; i++) { const a = i / 3 * 6.283; x.beginPath(); x.moveTo(Math.cos(a) * 60, Math.sin(a) * 60); x.lineTo(Math.cos(a + 2.094) * 60, Math.sin(a + 2.094) * 60); x.stroke(); }
-}, 256);
 // 바닥에 눕는 평면 데칼(마법진/그을림/서리 자국) — 카메라 빌보드가 아니라 지면 평행
 const decals = [];
 const _decalGeo = new THREE.PlaneGeometry(1, 1);
 function spawnDecal(pos, radius, color, tex, dur, spin, grow) {
-  const m = new THREE.Mesh(_decalGeo, new THREE.MeshBasicMaterial({ map: tex || _circleTex, color, transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }));
+  const m = new THREE.Mesh(_decalGeo, new THREE.MeshBasicMaterial({ map: tex || TEX.ring, color, transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }));
   m.rotation.x = -Math.PI / 2; m.position.set(pos.x, terrainHeight(pos.x, pos.z) + 0.08, pos.z);
   m.scale.setScalar(radius * 2); scene.add(m);
   decals.push({ m, t: 0, dur: dur || 0.8, spin: spin || 0, base: radius * 2, grow: grow || 0 });
@@ -424,7 +461,7 @@ function spawnDecal(pos, radius, color, tex, dur, spin, grow) {
 // 룬 마법진 데칼: 궁수는 마법진이 어울리지 않아 생략(대신 단순 충격 링만)
 function runeDecal(pos, radius, color, dur, spin, grow) {
   if (PSTATS && PSTATS.cls === "archer") return;
-  spawnDecal(pos, radius, color, _circleTex, dur, spin, grow);
+  spawnDecal(pos, radius, color, TEX.magic, dur, spin, grow);
 }
 function updateDecals(dt) {
   for (let i = decals.length - 1; i >= 0; i--) {
@@ -484,41 +521,46 @@ function screenFlash(color, alpha, dur) {
 // ---------- 투사체(파이어볼/화살) ----------
 const projectiles = [];
 const fx = [];
+const _fireballCoreGeo = new THREE.SphereGeometry(0.26, 10, 10);
+const _arrowGeo = new THREE.CylinderGeometry(0.04, 0.06, 1.15, 6);
+const _boltGeo = new THREE.SphereGeometry(0.2, 8, 8);
+const _boltMat = new THREE.MeshBasicMaterial({ color: 0xe2c6ff });
+const _fireballCoreMat = new THREE.MeshBasicMaterial({ color: 0xffe1ad });
+const _arrowMat = new THREE.MeshStandardMaterial({ color: 0xeaf2fb, metalness: 0.6, roughness: 0.35, emissive: 0x2a4f6b, emissiveIntensity: 0.6 });
 function spawnProjectile(type, dir, dmg, crit) {
   const origin = player.position.clone(); origin.y += 1.3; origin.addScaledVector(dir, 0.8);
-  const g = new THREE.Group(); let hitR, aoe = 0, trail, lightRef;
+  const g = new THREE.Group(); let hitR, aoe = 0, trail, li;
   if (type === "fireball") {
-    const core = new THREE.Mesh(new THREE.SphereGeometry(0.26, 12, 12), new THREE.MeshBasicMaterial({ color: 0xffe1ad }));
-    g.add(core);
-    const glow = glowSprite(TEX.glow, 0xff7b2e, crit ? 2.8 : 2.3); g.add(glow);
+    g.add(new THREE.Mesh(_fireballCoreGeo, _fireballCoreMat));
+    g.add(glowSprite(TEX.glow, 0xff7b2e, crit ? 2.8 : 2.3));
     g.add(glowSprite(TEX.disc, 0xffc25e, 1.15));
-    lightRef = new THREE.PointLight(0xff7b2e, 7, 12); g.add(lightRef);
-    g.userData.core = core; g.userData.glow = glow;
+    li = { c: 0xff7b2e, i: 7, d: 12, w: 4, flicker: true };   // 조명 풀 정보(개별 PointLight 생성 안 함)
     hitR = 1.0; aoe = PSTATS.aoe || 3.2;
     trail = { tex: TEX.glow, color: 0xff8a2e, size: 1.5, life: 0.34, rate: 0.012 };
     spriteFlash(origin, TEX.glow, 0xffb060, 0.6, 1.8, 0.13);          // 머즐 플래시
   } else {
-    const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.06, 1.15, 6),
-      new THREE.MeshStandardMaterial({ color: 0xeaf2fb, metalness: 0.6, roughness: 0.35, emissive: 0x2a4f6b, emissiveIntensity: 0.6 }));
+    const shaft = new THREE.Mesh(_arrowGeo, _arrowMat);
     shaft.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir); g.add(shaft);
-    const tip = glowSprite(TEX.glow, crit ? 0xfff0a0 : 0x9fe8ff, crit ? 1.3 : 1.0); g.add(tip);
-    lightRef = new THREE.PointLight(0x9fe8ff, 2.2, 6); g.add(lightRef);
+    g.add(glowSprite(TEX.glow, crit ? 0xfff0a0 : 0x9fe8ff, crit ? 1.3 : 1.0));
+    li = { c: crit ? 0xfff0a0 : 0x9fe8ff, i: 2.2, d: 6, w: 1 };
     hitR = 0.8;
     trail = { tex: TEX.glow, color: crit ? 0xffe27a : 0x8fd8ff, size: 0.75, life: 0.24, rate: 0.009 };
     spriteFlash(origin, TEX.glow, 0xbfeaff, 0.4, 1.2, 0.1);
   }
   g.position.copy(origin); scene.add(g);
-  projectiles.push({ mesh: g, vel: dir.clone().multiplyScalar(PSTATS.projSpeed), dmg, crit, type, hitR, aoe, life: 2.6, owner: "player", pierce: PSTATS.pierce || 0, hitSet: new Set(), trail, _tacc: 0, light: lightRef });
+  projectiles.push({ mesh: g, vel: dir.clone().multiplyScalar(PSTATS.projSpeed), dmg, crit, type, hitR, aoe, life: 2.6, owner: "player", pierce: PSTATS.pierce || 0, hitSet: new Set(), trail, _tacc: 0, li });
 }
 // 적 투사체(원거리 술사/대마법사 볼트) — 플레이어를 향해
+const ENEMY_PROJ_CAP = 80;     // 탄막 폭주 방지(렉 가드)
 function spawnEnemyProjectile(origin, dir, dmg) {
+  let cnt = 0; for (let i = 0; i < projectiles.length; i++) if (projectiles[i].owner === "enemy") cnt++;
+  if (cnt >= ENEMY_PROJ_CAP) return;
   const g = new THREE.Group();
-  g.add(new THREE.Mesh(new THREE.SphereGeometry(0.2, 10, 10), new THREE.MeshBasicMaterial({ color: 0xe2c6ff })));
+  g.add(new THREE.Mesh(_boltGeo, _boltMat));
   g.add(glowSprite(TEX.glow, 0xb86bff, 1.7));
-  g.add(new THREE.PointLight(0xb86bff, 3, 7));
   g.position.set(origin.x, origin.y, origin.z); scene.add(g);
   const v = new THREE.Vector3(dir.x, dir.y || 0, dir.z); if (v.lengthSq() < 1e-6) v.set(0, 0, 1); v.normalize().multiplyScalar(26);
-  projectiles.push({ mesh: g, vel: v, dmg, type: "bolt", hitR: 0.95, aoe: 0, life: 3.0, owner: "enemy", trail: { tex: TEX.glow, color: 0xb86bff, size: 1.0, life: 0.26, rate: 0.013 }, _tacc: 0 });
+  projectiles.push({ mesh: g, vel: v, dmg, type: "bolt", hitR: 0.95, aoe: 0, life: 3.0, owner: "enemy", trail: { tex: TEX.glow, color: 0xb86bff, size: 1.0, life: 0.26, rate: 0.013 }, _tacc: 0, li: { c: 0xb86bff, i: 3, d: 7, w: 2 } });
 }
 // ---------- 파티클 버스트 / 화면 흔들림 ----------
 const _burstGeo = new THREE.SphereGeometry(1, 6, 6);
@@ -577,7 +619,7 @@ function chainLightning(dmg, n) {
   if (!world) return;
   const list = world.enemies.filter((e) => !e.dead).sort((a, b) => a.obj.position.distanceTo(player.position) - b.obj.position.distanceTo(player.position)).slice(0, n);
   let from = player.position.clone(); from.y += 1.2;
-  list.forEach((e) => { const to = e.obj.position.clone(); to.y += 1.0; spawnBolt(from, to, 0xeaf6ff); spawnBolt(from, to, 0x9fd0ff); animExplosion(to, 3.0, 0xbfe0ff, 0.4); spriteFlash(to, TEX.glow, 0xcfeaff, 0.4, 1.8, 0.22); spawnSparks(to, 0xbfe6ff, 8, 10); world.applyDamage(e, dmg, false); from = to; });
+  list.forEach((e) => { const to = e.obj.position.clone(); to.y += 1.0; spawnBolt(from, to, 0xeaf6ff); spawnBolt(from, to, 0x9fd0ff); animExplosion(to, 3.0, 0xbfe0ff, 0.4); spriteFlash(to, TEX.glow, 0xcfeaff, 0.4, 1.8, 0.22); spawnSparks(to, 0xbfe6ff, 8, 10); world.applyDamage(e, dmg, false); if (world.applyStatus) world.applyStatus(e, "lightning", { dur: 2.5 }); from = to; });
   addShake(0.5);
 }
 // 메테오: 화면 암전 + 하늘에서 운석 낙하 + 착탄 폭발/광역
@@ -589,8 +631,8 @@ function meteorStrike(dmg, radius, count) {
     const ox = i === 0 ? 0 : (Math.random() - 0.5) * radius * 1.5, oz = i === 0 ? 0 : (Math.random() - 0.5) * radius * 1.5;
     const tx = center.x + ox, tz = center.z + oz, gy = terrainHeight(tx, tz);
     const m = new THREE.Mesh(new THREE.SphereGeometry(0.7, 10, 10), new THREE.MeshBasicMaterial({ color: 0xff5a1e }));
-    m.add(new THREE.PointLight(0xff7a2a, 6, 16)); m.position.set(tx, gy + 36, tz); scene.add(m);
-    meteors.push({ mesh: m, x: tx, z: tz, gy: gy, dmg: dmg, radius: radius, delay: i * 0.18 });
+    m.position.set(tx, gy + 36, tz); scene.add(m);
+    meteors.push({ mesh: m, x: tx, z: tz, gy: gy, dmg: dmg, radius: radius, delay: i * 0.18, li: { c: 0xff7a2a, i: 6, d: 16, w: 5, flicker: true } });
   }
 }
 function updateMeteors(dt) {
@@ -603,7 +645,7 @@ function updateMeteors(dt) {
     if (mt.mesh.position.y <= mt.gy + 0.6) {
       const pos = new THREE.Vector3(mt.x, mt.gy + 0.5, mt.z);
       spawnExplosion(pos, mt.radius); fxRing(pos, mt.radius, 0xff7a2a); spawnBurst(pos, 0x8a5030, 16, 11, 0.32, 0.7);
-      if (world) for (const e of world.enemies.slice()) if (!e.dead && e.obj.position.distanceTo(pos) < mt.radius + e.def.radius) world.applyDamage(e, mt.dmg, true);
+      if (world) for (const e of world.enemies.slice()) if (!e.dead && e.obj.position.distanceTo(pos) < mt.radius + e.def.radius) { world.applyDamage(e, mt.dmg, true); if (world.applyStatus) world.applyStatus(e, "fire", { dur: 3, dps: Math.max(6, Math.round(mt.dmg * 0.1)) }); }
       addShake(1.0); scene.remove(mt.mesh); meteors.splice(i, 1);
     }
   }
@@ -694,7 +736,7 @@ function vortex(pos, radius, dur, color, dmg, dmgEvery) {
     }
     spawnTrailPuff(new THREE.Vector3(e.pos.x, baseY + 0.5 + (e.t * 3 % 1) * radius * 1.9, e.pos.z), color, 1.6, 0.4, TEX.glow);   // 중심 기둥
     dmgAcc += e.rate;
-    if (dmg && world && dmgAcc >= (dmgEvery || 0.4)) { dmgAcc = 0; for (const en of world.enemies.slice()) if (!en.dead && en.obj.position.distanceTo(e.pos) < radius + en.def.radius) world.applyDamage(en, dmg, false); }
+    if (dmg && world && dmgAcc >= (dmgEvery || 0.4)) { dmgAcc = 0; for (const en of world.enemies.slice()) if (!en.dead && en.obj.position.distanceTo(e.pos) < radius + en.def.radius) { world.applyDamage(en, dmg, false); if (world.applyStatus) world.applyStatus(en, "ice", { dur: 2.5 }); } }
   } });
   addShake(0.6);
 }
@@ -754,7 +796,7 @@ function dotZone(pos, radius, dps, dur, color, kind) {
       kind === "poison" ? TEX.smoke : TEX.glow, color, 0.6, 1.6, 0.5, kind === "poison" ? "normal" : null);
   } });
   let acc = 0;
-  addEmitter({ pos: pos.clone(), dur, rate: 0.4, tick: (e) => { for (const en of _enemiesIn(e.pos, radius)) world.applyDamage(en, Math.round(dps * 0.4), false); } });
+  addEmitter({ pos: pos.clone(), dur, rate: 0.4, tick: (e) => { for (const en of _enemiesIn(e.pos, radius)) { world.applyDamage(en, Math.round(dps * 0.4), false); _applyElem(en, kind, dps); } } });
 }
 // 생명 흡수: 광역 피해 + 가한 피해의 일부 회복
 function lifeDrain(radius, dmg, healFrac) {
@@ -798,7 +840,7 @@ function bombDelayed(dmg, radius, delay) {
   const t = world && world.nearestEnemy(player.position, 40); const c = t ? t.obj.position.clone() : player.position.clone(); c.y = _gy(c.x, c.z);
   const warn = new THREE.Mesh(new THREE.RingGeometry(radius * 0.9, radius, 36), new THREE.MeshBasicMaterial({ color: 0xff3030, transparent: true, opacity: 0.2, side: THREE.DoubleSide }));
   warn.rotation.x = -Math.PI / 2; warn.position.set(c.x, c.y + 0.1, c.z); scene.add(warn); warns.push({ mesh: warn, t: 0, dur: delay });
-  spawnDecal(c, radius, 0xff5030, _circleTex, delay, 2, 0);
+  spawnDecal(c, radius, 0xff5030, TEX.magic, delay, 2, 0);
   setTimeout(() => { if (!world) return; spawnExplosion(c.clone().setY(c.y + 0.5), radius); for (const e of _enemiesIn(c, radius)) world.applyDamage(e, dmg, true); }, delay * 1000);
 }
 // 처형: 광역 피해 + 저체력 적 즉결 처형(추가 피해)
@@ -938,20 +980,37 @@ function fxHit(pos, color) {
   addShake(0.22);
   if (color === 0xffd23f) addHitstop(0.05);   // 크리티컬 시 순간 정지
 }
+// 투사체가 솔리드 장애물(바위/나무)에 막혔는지 — 엄폐물 뒤로 숨으면 피탄되지 않게
+function _projBlocked(p) {
+  const py = p.mesh.position.y;
+  for (let k = 0; k < obstacles.length; k++) {
+    const o = obstacles[k];
+    if (py > o.h) continue;                          // 장애물보다 높이 나는 투사체는 통과
+    const dx = p.mesh.position.x - o.x, dz = p.mesh.position.z - o.z;
+    const rr = o.r + p.hitR * 0.5;
+    if (dx * dx + dz * dz < rr * rr) return true;
+  }
+  return false;
+}
+// 투사체 제거 — 그룹의 스프라이트 머티리얼만 정리(코어 지오메트리/머티리얼은 공유라 보존)
+function removeProjectile(p, i) {
+  p.mesh.traverse((o) => { if (o.isSprite && o.material) o.material.dispose(); });
+  scene.remove(p.mesh); projectiles.splice(i, 1);
+}
 function updateProjectiles(dt) {
   const enemies = world ? world.enemies : [];
   for (let i = projectiles.length - 1; i >= 0; i--) {
     const p = projectiles[i];
     p.mesh.position.addScaledVector(p.vel, dt); p.life -= dt;
     if (p.trail) { p._tacc += dt; if (p._tacc >= p.trail.rate) { p._tacc = 0; spawnTrailPuff(p.mesh.position, p.trail.color, p.trail.size, p.trail.life, p.trail.tex); } }
-    if (p.type === "fireball") { const fl = 0.85 + Math.random() * 0.35; if (p.light) p.light.intensity = 7 * fl; if (p.mesh.userData.glow) p.mesh.userData.glow.material.rotation += dt * 4; }
     const onGround = p.mesh.position.y <= terrainHeight(p.mesh.position.x, p.mesh.position.z);
+    const blocked = _projBlocked(p);                 // 엄폐물에 차폐
 
     if (p.owner === "enemy") {                       // 적 투사체 → 플레이어
       let hit = player && !GAME.dead && p.mesh.position.distanceTo(player.position) < p.hitR + 1.0;
-      if (hit || onGround || p.life <= 0) {
+      if (hit || onGround || blocked || p.life <= 0) {
         if (hit) onPlayerHit(Math.round(p.dmg));
-        scene.remove(p.mesh); projectiles.splice(i, 1);
+        removeProjectile(p, i);
       }
       continue;
     }
@@ -959,21 +1018,27 @@ function updateProjectiles(dt) {
     // 플레이어 투사체 → 적
     if (p.type === "fireball") {
       let hit = false;
-      for (const e of enemies) { if (!e.dead && p.mesh.position.distanceTo(e.obj.position) < p.hitR + e.def.radius) { hit = true; break; } }
-      if (hit || onGround || p.life <= 0) {
-        for (const e of enemies.slice()) { if (!e.dead && p.mesh.position.distanceTo(e.obj.position) < p.aoe + e.def.radius) world.applyDamage(e, p.dmg, p.crit); }
+      const fuse = Math.max(p.hitR, p.aoe * 0.45);    // 근접 신관: 적 근처면 확실히 폭발(다중 화염구 전부 명중)
+      for (const e of enemies) { if (!e.dead && p.mesh.position.distanceTo(e.obj.position) < fuse + e.def.radius) { hit = true; break; } }
+      if (hit || onGround || blocked || p.life <= 0) {
+        for (const e of enemies.slice()) {
+          if (!e.dead && p.mesh.position.distanceTo(e.obj.position) < p.aoe + e.def.radius) {
+            world.applyDamage(e, p.dmg, p.crit);
+            if (world.applyStatus) world.applyStatus(e, "fire", { dur: 2.5, dps: Math.max(4, Math.round(p.dmg * 0.15)) });   // 화염구: 화상 부여
+          }
+        }
         spawnExplosion(p.mesh.position, p.aoe);
-        scene.remove(p.mesh); projectiles.splice(i, 1);
+        removeProjectile(p, i);
       }
     } else {                                          // 화살/볼트 — 관통(pierce) 지원
       for (const e of enemies) {
         if (e.dead || p.hitSet.has(e)) continue;
         if (p.mesh.position.distanceTo(e.obj.position) < p.hitR + e.def.radius) {
           world.applyDamage(e, p.dmg, p.crit); p.hitSet.add(e);
-          if (p.pierce > 0) p.pierce--; else { scene.remove(p.mesh); projectiles.splice(i, 1); break; }
+          if (p.pierce > 0) p.pierce--; else { removeProjectile(p, i); break; }
         }
       }
-      if (projectiles[i] === p && (onGround || p.life <= 0)) { scene.remove(p.mesh); projectiles.splice(i, 1); }
+      if (projectiles[i] === p && (onGround || blocked || p.life <= 0)) { removeProjectile(p, i); }
     }
   }
   for (let i = fx.length - 1; i >= 0; i--) {
@@ -993,9 +1058,17 @@ function onDamageNumber(worldPos, yOff, amount, type) {
 }
 
 // 흡혈: 가한 피해의 일부를 회복(스킬)
+// 무적 빌드 방지 — ①흡혈률 상한 ②짧은 시간창 회복 총량 상한(다중 투사체·광역 폭발 누적 차단)
+let lsBudget = 0;                 // 현재 시간창에서 이미 회복한 양
 function onHit(dmg) {
   if (GAME.dead || !PSTATS.lifesteal) return;
-  GAME.hp = Math.min(GAME.maxHp, GAME.hp + dmg * PSTATS.lifesteal);
+  const rate = Math.min(PSTATS.lifesteal, 0.35);     // 흡혈률 최대 35%
+  const cap = GAME.maxHp * 0.12;                     // 0.6초당 최대 회복 = 최대 체력의 12%
+  if (lsBudget >= cap) return;
+  let heal = Math.min(dmg * rate, cap - lsBudget);
+  if (heal <= 0) return;
+  lsBudget += heal;
+  GAME.hp = Math.min(GAME.maxHp, GAME.hp + heal);
   UI.setHP(GAME.hp, GAME.maxHp);
 }
 
@@ -1096,6 +1169,11 @@ const SKILLS = [
     ]],
   ]),
 ];
+let skillLv = {};   // 스킬 보유 레벨(중복 선택 시 누적 → 같은 스킬을 레벨업처럼 강화)
+function _draftDone() {
+  pendingLv--;
+  if (pendingLv > 0) openDraft(); else { paused = false; UI.setXP(GAME.xp, GAME.xpNext, GAME.level); }
+}
 function openDraft() {
   if (pendingLv <= 0) { paused = false; return; }
   paused = true;
@@ -1109,11 +1187,18 @@ function openDraft() {
   while (ch.length < 3 && rp.length) ch.push(pick(rp));
   while (ch.length < 3 && up.length) ch.push(pick(up));
   for (let i = ch.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [ch[i], ch[j]] = [ch[j], ch[i]]; }
-  UI.showLevelUp(ch.map((s) => ({ name: s.name, desc: s.desc })), (idx) => {
-    const s = ch[idx]; if (s && s.apply) s.apply();
-    if (s) UI.toast("습득: " + s.name);
-    pendingLv--;
-    if (pendingLv > 0) openDraft(); else { paused = false; UI.setXP(GAME.xp, GAME.xpNext, GAME.level); }
+  const cards = ch.map((s) => {
+    const lv = skillLv[s.id] || 0;
+    return { name: s.name + (lv > 0 ? "  Lv" + (lv + 1) : ""), desc: s.desc + (lv > 0 ? "  · 보유 Lv" + lv + " → Lv" + (lv + 1) : "") };
+  });
+  UI.showLevelUp(cards, (idx) => {
+    const s = ch[idx];
+    if (s && s.apply) { s.apply(); skillLv[s.id] = (skillLv[s.id] || 0) + 1; UI.toast("습득: " + s.name + (skillLv[s.id] > 1 ? " Lv" + skillLv[s.id] : "")); }
+    _draftDone();
+  }, () => {                                  // 건너뛰기: 작은 보상(회복 + 소량 영구 강화)
+    healHp(20); PSTATS.dmg += 2;
+    UI.toast("선택 건너뜀 — 체력 +20, 공격 +2");
+    _draftDone();
   });
 }
 function addXP(n) {
@@ -1163,25 +1248,49 @@ const BIOMES = {
   forest: { name: "숲", tex: "grass", tint: 0x9fbf7a, sky: true, elev: 55,
     fog: 0xcfe0ee, near: 120, far: 300, hemiSky: 0xbfe3ff, hemiGr: 0x6b7a4a, hemiI: 0.9, sunC: 0xfff4e0, sunI: 2.6,
     water: true, waterC: 0x2f6f9e, plight: false,
-    props: [{ kind: "leafy", n: 120, minH: WATER_Y + 0.8, maxH: 10, sMin: 0.8, sMax: 1.5 },
-            { kind: "bushes", n: 70, maxH: 9 }, { kind: "grass", n: 150, maxH: 8, cast: false }, { kind: "rocks", n: 50 }] },
+    props: [{ kind: "leafy", n: 120, minH: WATER_Y + 0.8, maxH: 10, sMin: 0.8, sMax: 1.5, solid: true, cr: 0.55, ch: 8 },
+            { kind: "bushes", n: 70, maxH: 9 }, { kind: "grass", n: 150, maxH: 8, cast: false }, { kind: "rocks", n: 50, solid: true, cr: 1.1, ch: 3 }] },
   cave: { name: "동굴", tex: "rock", tint: 0xb4b4be, sky: false, bg: 0x1a1d27,
     fog: 0x1a1d27, near: 16, far: 95, hemiSky: 0x6d7aa0, hemiGr: 0x24283a, hemiI: 0.7, sunC: 0x9fb4d8, sunI: 0.5, ambient: 0.55,
     water: false, plight: true, plightC: 0xffe0b0, plightI: 30, plightDist: 38,
-    props: [{ kind: "rocks", n: 150, sMin: 0.7, sMax: 2.3 },
+    props: [{ kind: "rocks", n: 150, sMin: 0.7, sMax: 2.3, solid: true, cr: 1.0, ch: 3 },
             { kind: "rocks", n: 45, emissive: 0x33e6ff, sMin: 0.4, sMax: 1.0, cast: false }] },
   snow: { name: "설원", tex: "snow", tint: 0xeef4ff, sky: true, elev: 28,
     fog: 0xdfe8f2, near: 80, far: 250, hemiSky: 0xdfeaff, hemiGr: 0x9fb0c8, hemiI: 1.0, sunC: 0xfff6e8, sunI: 2.2,
     water: false, plight: false,
-    props: [{ kind: "pine", n: 90, maxH: 11, sMin: 0.8, sMax: 1.5 }, { kind: "rocks", n: 70 }] },
+    props: [{ kind: "pine", n: 90, maxH: 11, sMin: 0.8, sMax: 1.5, solid: true, cr: 0.55, ch: 9 }, { kind: "rocks", n: 70, solid: true, cr: 1.0, ch: 3 }] },
   lava: { name: "용암 동굴", tex: "rock", tint: 0x7a4034, sky: false, bg: 0x2a1208,
     fog: 0x3a1810, near: 26, far: 140, hemiSky: 0xaa5540, hemiGr: 0x2a0e08, hemiI: 0.75, sunC: 0xff8a4a, sunI: 1.7, ambient: 0.4,
     water: true, waterC: 0xff4500, plight: true, plightC: 0xff8050, plightI: 22, plightDist: 36,
-    props: [{ kind: "rocks", n: 120, sMin: 0.7, sMax: 2.0 },
+    props: [{ kind: "rocks", n: 120, sMin: 0.7, sMax: 2.0, solid: true, cr: 1.0, ch: 3 },
             { kind: "rocks", n: 35, emissive: 0xff5520, sMin: 0.4, sMax: 1.1, cast: false }] },
 };
 const BIOME_ORDER = ["forest", "cave", "snow", "lava"];
-function biomeFor(floor) { return BIOMES[BIOME_ORDER[(floor - 1) % BIOME_ORDER.length]]; }
+// 20층 테마 — 4종 베이스(숲/동굴/설원/용암)를 색조·안개·조명으로 변주해 층마다 다른 분위기.
+function _theme(base, over) { return Object.assign({}, BIOMES[base], over); }
+const FLOOR_THEMES = [
+  _theme("forest", { name: "숲" }),
+  _theme("forest", { name: "깊은 숲", tint: 0x6f9a5a, fog: 0xb6ccb4, far: 240, hemiGr: 0x4a5a32 }),
+  _theme("cave",   { name: "수정 동굴", tint: 0x8ba6cc, bg: 0x141a2a, plightC: 0x66c0ff }),
+  _theme("snow",   { name: "설원" }),
+  _theme("snow",   { name: "빙하 협곡", tint: 0xcfe2ff, fog: 0xcdd9ee, sunC: 0xeaf2ff }),
+  _theme("lava",   { name: "화염 동굴" }),
+  _theme("lava",   { name: "용암 지대", tint: 0x9a4030, waterC: 0xff5a14, plightC: 0xff9a50 }),
+  _theme("forest", { name: "독성 늪", tint: 0x7fae4a, fog: 0xaec27a, waterC: 0x4f7a2e, hemiSky: 0xcfe39a }),
+  _theme("snow",   { name: "황무지", tint: 0xb09a72, fog: 0xd8caa8, sunC: 0xfff0d0, hemiSky: 0xe8dcc0 }),
+  _theme("cave",   { name: "고대 폐허", tint: 0xcaa860, bg: 0x221c12, plightC: 0xffd27a }),
+  _theme("cave",   { name: "어둠의 동굴", tint: 0x5a5a72, bg: 0x0e0f17, plightC: 0x9a8aff, far: 80 }),
+  _theme("snow",   { name: "서리 심연", tint: 0xaecfe8, fog: 0xc2d4ea, sunC: 0xdce8ff }),
+  _theme("lava",   { name: "잿빛 화산", tint: 0x8a5a4a, fog: 0x4a2a20, plightC: 0xff7a40 }),
+  _theme("forest", { name: "부패의 늪", tint: 0x6f9a3a, fog: 0x9ab06a, waterC: 0x3f6a24, hemiSky: 0xbcd488 }),
+  _theme("forest", { name: "황혼 평원", tint: 0xb08ad0, fog: 0xd4bce8, sunC: 0xffd8e8, hemiSky: 0xe0c8f0 }),
+  _theme("cave",   { name: "결정 심연", tint: 0x66c0c0, bg: 0x0e2024, plightC: 0x66f0e0 }),
+  _theme("lava",   { name: "지옥불", tint: 0xc24020, fog: 0x4a1408, waterC: 0xff4500, plightC: 0xff8040, plightI: 26 }),
+  _theme("snow",   { name: "영원한 겨울", tint: 0xe2eeff, fog: 0xdce8f6, sunC: 0xf0f6ff }),
+  _theme("cave",   { name: "공허의 균열", tint: 0x7a5aa0, bg: 0x120a1e, plightC: 0xb070ff, far: 85 }),
+  _theme("lava",   { name: "마왕의 옥좌", tint: 0x8a2018, bg: 0x2a0808, fog: 0x3a0c08, waterC: 0xff3010, plightC: 0xff5030, plightI: 28 }),
+];
+function biomeFor(floor) { return FLOOR_THEMES[(floor - 1) % FLOOR_THEMES.length]; }
 
 function applyBiome(b) {
   terrainMesh.material = biomeMat(b);
@@ -1201,13 +1310,14 @@ function applyBiome(b) {
   // 블룸: 밝은 하늘 바이옴은 약하게(하늘 번짐 방지), 어두운 폐쇄 바이옴은 강하게(발광 강조)
   bloomPass.strength = b.sky ? 0.12 : 0.65;
   bloomPass.threshold = b.sky ? 0.92 : 0.7;
-  if (playerLight) {
-    playerLight.visible = !!b.plight;
+  if (playerLight) {   // visible 토글 대신 intensity로 제어 → 조명 개수 불변(셰이더 재컴파일 방지)
     if (b.plight) { playerLight.color.setHex(b.plightC); playerLight.intensity = b.plightI; playerLight.distance = b.plightDist || 30; }
+    else playerLight.intensity = 0;
   }
 }
 function scatterBiome(b) {
   for (let i = propGroup.children.length - 1; i >= 0; i--) propGroup.remove(propGroup.children[i]);
+  obstacles.length = 0;   // 이전 층 장애물 콜라이더 정리
   if (!NP) return;
   for (const p of b.props) { const protos = NP[p.kind]; if (protos) scatterFrom(protos, p.n, p); }
 }
@@ -1228,17 +1338,25 @@ function enterFloor(floor) {
   player.position.set(0, terrainHeight(0, 0), 0);
   vy = 0; grounded = true; camReady = false;       // 카메라 재정착
   world.startFloor(floor, { arena });
-  UI.setFloor(floor);
-  UI.banner("지하 " + floor + "층 — " + b.name, 1700);
+  UI.setFloor(floor, b.name);
+  UI.banner(floor + "층 · " + b.name, 1700);
 }
 // ---------- 액티브 스킬 (보스 보상, Q/W/E/R 장착, 티어) ----------
+// 속성별 상태이상 부여(원소 차별화): 불=화상, 독=중독, 얼음=둔화, 번개=감전
+function _applyElem(e, kind, dmg) {
+  if (!world || !world.applyStatus) return;
+  if (kind === "fire") world.applyStatus(e, "fire", { dur: 3, dps: Math.max(5, Math.round((dmg || 0) * 0.15)) });
+  else if (kind === "poison") world.applyStatus(e, "poison", { dur: 4, dps: Math.max(4, Math.round((dmg || 0) * 0.12)) });
+  else if (kind === "ice" || kind === "frost") world.applyStatus(e, "ice", { dur: 2.5 });
+  else if (kind === "lightning" || kind === "shock") world.applyStatus(e, "lightning", { dur: 2.5 });
+}
 const SKILL_API = {
   fxRing, spawnExplosion, addShake,
   heal(p) { GAME.hp = Math.min(GAME.maxHp, GAME.hp + GAME.maxHp * p); UI.setHP(GAME.hp, GAME.maxHp); const c = player.position.clone().setY(player.position.y + 1); spriteFlash(c, TEX.glow, 0x7dffa0, 0.6, 2.4, 0.5); spawnSparks(c, 0x9bffb8, 14, 6); auraFollow(0.8, 0x66ff88, true); },
-  aoe(radius, dmg, color, kind) { if (!world) return; elementBurst(player.position.clone().setY(player.position.y + 0.6), radius, color || 0xff8a3a, kind); for (const e of world.enemies.slice()) if (!e.dead && e.obj.position.distanceTo(player.position) < radius + e.def.radius) world.applyDamage(e, dmg, false); },
-  frost(radius, dur, big) { if (world && world.stunNearby) world.stunNearby(player.position, radius, dur); const c = player.position.clone().setY(player.position.y + 0.6); if (big) blizzard(c, radius, dur + 0.5); else frostNova(c, Math.min(radius, 9), 1.0); },
+  aoe(radius, dmg, color, kind) { if (!world) return; elementBurst(player.position.clone().setY(player.position.y + 0.6), radius, color || 0xff8a3a, kind); for (const e of world.enemies.slice()) if (!e.dead && e.obj.position.distanceTo(player.position) < radius + e.def.radius) { world.applyDamage(e, dmg, false); _applyElem(e, kind, dmg); } },
+  frost(radius, dur, big) { if (world && world.stunNearby) world.stunNearby(player.position, radius, dur); if (world && world.applyStatus) for (const e of world.enemies) if (!e.dead && e.obj.position.distanceTo(player.position) < radius + e.def.radius) world.applyStatus(e, "ice", { dur: Math.max(2.5, dur + 1.5) }); const c = player.position.clone().setY(player.position.y + 0.6); if (big) blizzard(c, radius, dur + 0.5); else frostNova(c, Math.min(radius, 9), 1.0); },
   stun(radius, dur) { if (world && world.stunNearby) { world.stunNearby(player.position, radius, dur); fxRing(player.position, Math.min(radius, 12), 0x66ccff); } },
-  chain(n, dmg) { if (!world) return; world.enemies.filter((e) => !e.dead).sort((a, b) => a.obj.position.distanceTo(player.position) - b.obj.position.distanceTo(player.position)).slice(0, n).forEach((e) => { world.applyDamage(e, dmg, false); fxRing(e.obj.position, 1.5, 0xfff066); }); },
+  chain(n, dmg) { if (!world) return; world.enemies.filter((e) => !e.dead).sort((a, b) => a.obj.position.distanceTo(player.position) - b.obj.position.distanceTo(player.position)).slice(0, n).forEach((e) => { world.applyDamage(e, dmg, false); if (world.applyStatus) world.applyStatus(e, "lightning", { dur: 2.5 }); fxRing(e.obj.position, 1.5, 0xfff066); }); },
   meteor(dmg, radius) { if (!world) return; const t = world.nearestEnemy(player.position, 45); const pos = t ? t.obj.position.clone() : player.position.clone(); spawnExplosion(pos, radius); for (const e of world.enemies.slice()) if (!e.dead && e.obj.position.distanceTo(pos) < radius + e.def.radius) world.applyDamage(e, dmg, true); addShake(1.2); },
   shield(secs) { playerShield = Math.max(playerShield, secs); const c = player.position.clone().setY(player.position.y + 1); spriteFlash(c, TEX.glow, 0x7db4ff, 0.8, 3.0, 0.45); auraFollow(secs, 0x66aaff, false); },
   rage(secs) { buffT = Math.max(buffT, secs); const c = player.position.clone().setY(player.position.y + 1); spriteFlash(c, TEX.glow, 0xff6a4a, 0.8, 3.0, 0.45); spawnSparks(c, 0xff8a3a, 20, 9); auraFollow(secs, 0xff5533, true); },
@@ -1392,7 +1510,14 @@ function onBossKilled() {
   GAME.gold += 50 * GAME.floor; UI.setGold(GAME.gold);
   GAME.hp = GAME.maxHp; UI.setHP(GAME.hp, GAME.maxHp);   // 층 클리어 시 전체 회복
   UI.hideBoss();
+  if (GAME.floor === 20) { UI.banner("🏆 마왕을 물리쳤습니다! 승리!", 3200); addShake(1.4); screenFlash("rgba(255,220,120,0.5)", 0.6, 600); }
   openBossReward(() => UI.floorClear(GAME.floor, () => enterFloor(GAME.floor + 1)));
+}
+// 보스 봉인 진행 알림: 잡몹을 처치할수록 봉인이 풀린다(잡몹 의의 부여)
+function onSealInfo(sealed, killed, goal) {
+  if (sealed && killed === 0) { UI.toast("보스 봉인 — 잡몹 " + goal + "마리 처치 시 해제"); }
+  else if (sealed) { if (killed % 2 === 0 || goal - killed <= 2) UI.toast("봉인 해제까지 " + (goal - killed) + "마리"); }
+  else { UI.banner("보스의 봉인이 풀렸다!", 1800); addShake(0.8); }
 }
 
 const loader = new GLTFLoader();
@@ -1412,7 +1537,7 @@ function startGame(c) {
   PSTATS = { dmg: c.dmg, attackWindup: c.windup, atkInterval: c.atkInterval || 0.4, atkType: c.atkType, atkClip: c.atkClip, projSpeed: c.projSpeed || 30, aoe: c.aoe || 0, skill: c.skill, skillClip: c.skillClip,
     critChance: 0.2, extraShots: 0, pierce: 0, lifesteal: 0, skillCdMult: 1,
     cls: c.key || "knight", meleeReach: 3.4, dmgReduce: 0, critMult: 0 };
-  paused = false; pendingLv = 0; playerShield = 0; buffT = 0; buffs.length = 0;
+  paused = false; pendingLv = 0; playerShield = 0; buffT = 0; buffs.length = 0; skillLv = {}; lsBudget = 0;
   GAME.actives = [null, null, null, null]; refreshActives();
   parryWindow = 0; iframes = 0; skillCd = 0; dashTime = 0; playerAtkCd = 0;
   GAME.maxHp = c.hp; GAME.hp = c.hp; GAME.level = 1; GAME.xp = 0; GAME.xpNext = 100; GAME.gold = 0; GAME.dead = false;
@@ -1426,7 +1551,7 @@ function startGame(c) {
   scene.add(player);
   // 동굴/용암 바이옴용 플레이어 주변 광원(기본 꺼짐, applyBiome에서 토글)
   playerLight = new THREE.PointLight(0xffd9a0, 0, 22);
-  playerLight.position.set(0, 2.5, 0); playerLight.visible = false;
+  playerLight.position.set(0, 2.5, 0);   // 항상 씬에 유지(intensity로만 on/off)
   player.add(playerLight);
 
   mixer = new THREE.AnimationMixer(player);
@@ -1455,7 +1580,7 @@ function startGame(c) {
     scene, camera, terrainHeight, WORLD, CLIP, monsters: monstersRef,
     getPlayer: () => player,
     onEnemyKilled, onBossKilled, onPlayerHit, onDamageNumber, onHit,
-    spawnEnemyProjectile, fxRing, fxHit, bossAoE,
+    spawnEnemyProjectile, fxRing, fxHit, bossAoE, onSealInfo,
   });
   UI.setHP(GAME.hp, GAME.maxHp); UI.setXP(GAME.xp, GAME.xpNext, GAME.level); UI.setGold(GAME.gold);
   GAME.started = true;
@@ -1477,7 +1602,22 @@ Promise.all([
   loadGLB("assets/models/nature/rocks.glb"),
   loadGLB("assets/models/nature/bushes.glb"),
   loadGLB("assets/models/nature/grass.glb"),
-]).then(([gKnight, gMage, gRogue, gMinion, gWarrior, gSkRogue, gSkMage, gTrees, gPine, gMaple, gRocks, gBushes, gGrass]) => {
+  loadGLB("assets/models/monsters/dragon.glb"),
+  loadGLB("assets/models/monsters/dragon_evolved.glb"),
+  loadGLB("assets/models/monsters/demon.glb"),
+  loadGLB("assets/models/monsters/blue_demon.glb"),
+  loadGLB("assets/models/monsters/orc.glb"),
+  loadGLB("assets/models/monsters/orc_enemy.glb"),
+  loadGLB("assets/models/monsters/yeti.glb"),
+  loadGLB("assets/models/monsters/golem.glb"),
+  loadGLB("assets/models/monsters/golem_evolved.glb"),
+  loadGLB("assets/models/monsters/mushroom_king.glb"),
+  loadGLB("assets/models/monsters/ghost.glb"),
+  loadGLB("assets/models/monsters/ghost_skull.glb"),
+  loadGLB("assets/models/monsters/dino.glb"),
+  loadGLB("assets/models/monsters/wizard.glb"),
+]).then(([gKnight, gMage, gRogue, gMinion, gWarrior, gSkRogue, gSkMage, gTrees, gPine, gMaple, gRocks, gBushes, gGrass,
+          gDragon, gDragonE, gDemon, gBlueDemon, gOrc, gOrcE, gYeti, gGolem, gGolemE, gMushK, gGhost, gGhostSk, gDino, gWizard]) => {
   // 식생/바위 프로토타입 저장(바이옴마다 enterFloor에서 골라 배치)
   NP = {
     leafy: [].concat(makePrototypes(gTrees, 5.5), makePrototypes(gMaple, 5.5)),
@@ -1487,11 +1627,24 @@ Promise.all([
     grass: makePrototypes(gGrass, 0.8),
   };
 
+  // Quaternius 생물 리그 클립 매핑(3종 규격)
+  const C_FLY = { idle: "CharacterArmature|Flying_Idle", walk: "CharacterArmature|Flying_Idle", run: "CharacterArmature|Fast_Flying", attack: "CharacterArmature|Headbutt", death: "CharacterArmature|Death", hit: "CharacterArmature|HitReact", jump: "CharacterArmature|Fast_Flying" };
+  const C_WALK = { idle: "CharacterArmature|Idle", walk: "CharacterArmature|Walk", run: "CharacterArmature|Run", attack: "CharacterArmature|Punch", death: "CharacterArmature|Death", hit: "CharacterArmature|HitReact", jump: "CharacterArmature|Jump" };
+  const C_SIMPLE = { idle: "CharacterArmature|Idle", walk: "CharacterArmature|Walk", run: "CharacterArmature|Walk", attack: "CharacterArmature|Bite_Front", death: "CharacterArmature|Death", hit: "CharacterArmature|HitRecieve", jump: "CharacterArmature|Jump" };
+  const _mk = (g, h, clips) => ({ gltf: g, scale: normScale(g.scene, h), creature: true, clips });
   monstersRef = {
     minion: { gltf: gMinion, scale: normScale(gMinion.scene, 1.7) },
     warrior: { gltf: gWarrior, scale: normScale(gWarrior.scene, 1.9) },
     rogue: { gltf: gSkRogue, scale: normScale(gSkRogue.scene, 1.75) },
     mage: { gltf: gSkMage, scale: normScale(gSkMage.scene, 1.8) },
+    // 신규 CC0 생물(Quaternius, poly.pizza)
+    dragon: _mk(gDragon, 2.4, C_FLY), dragon_evolved: _mk(gDragonE, 2.8, C_FLY),
+    demon: _mk(gDemon, 2.3, C_FLY), blue_demon: _mk(gBlueDemon, 2.1, C_WALK),
+    orc: _mk(gOrc, 2.0, C_WALK), orc_enemy: _mk(gOrcE, 1.8, C_SIMPLE),
+    yeti: _mk(gYeti, 2.2, C_SIMPLE), golem: _mk(gGolem, 1.9, C_FLY),
+    golem_evolved: _mk(gGolemE, 2.4, C_FLY), mushroom_king: _mk(gMushK, 2.1, C_WALK),
+    ghost: _mk(gGhost, 1.9, C_FLY), ghost_skull: _mk(gGhostSk, 1.9, C_FLY),
+    dino: _mk(gDino, 1.9, C_WALK), wizard: _mk(gWizard, 1.8, C_SIMPLE),
   };
 
   // 선택 가능한 캐릭터 (공격 방식 차별화)
@@ -1630,13 +1783,15 @@ function update(dt) {
   if (world) {
     world.update(dt);
     updateProjectiles(dt);
+    updateProjectileLights();          // 고정 조명 풀을 활성 투사체에 재배정(렉 방지)
     updateBursts(dt);
     updateTrails(dt); updateSparks(dt); updateFxSprites(dt);
     updateEmitters(dt); updateShards(dt); updateDecals(dt); updateEmbers(dt); updateAnims(dt); updateBuffs(dt);
+    if (lsBudget > 0) lsBudget = Math.max(0, lsBudget - GAME.maxHp * 0.2 * dt);   // 흡혈 회복 예산 회복(0.6초 주기)
     updateBolts(dt); updateMeteors(dt); updateWarns(dt);
     refreshActives();                  // Q/W/E/R 쿨다운 표시 갱신
     const b = world.boss;
-    if (b && !b.dead) UI.setBoss(b.def.name, b.hp / b.maxHp); else UI.hideBoss();
+    if (b && !b.dead) UI.setBoss((b.sealed ? "🔒 " : "") + b.def.name, b.hp / b.maxHp); else UI.hideBoss();
   }
 }
 

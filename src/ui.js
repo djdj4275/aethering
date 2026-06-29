@@ -287,25 +287,61 @@ const CSS = `
 #ui-levelup .ui-lu-sub{
   font-size:13px; color:#9fe0ff; opacity:.85; margin-bottom:26px; letter-spacing:.5px;
 }
-#ui-levelup .ui-lu-cards{ display:flex; gap:18px; flex-wrap:wrap; justify-content:center; }
+#ui-levelup .ui-lu-cards{ display:flex; gap:22px; flex-wrap:wrap; justify-content:center; perspective:1200px; }
 .ui-lu-card{
-  pointer-events:auto; cursor:pointer; width:220px; text-align:left;
-  background:rgba(20,16,4,.6); border:1px solid rgba(255,210,63,.3);
-  border-radius:14px; padding:20px 18px 22px; position:relative;
-  transition:transform .15s, border-color .15s, box-shadow .15s, background .15s;
+  pointer-events:auto; cursor:pointer; width:236px; min-height:220px; text-align:center;
+  background:
+    radial-gradient(120% 80% at 50% -10%, rgba(255,210,63,.16), rgba(255,210,63,0) 60%),
+    linear-gradient(180deg, rgba(30,24,46,.92), rgba(12,12,24,.94));
+  border-radius:18px; padding:54px 18px 22px; position:relative; isolation:isolate;
+  box-shadow:0 14px 34px rgba(0,0,0,.55), inset 0 1px 0 rgba(255,255,255,.08);
+  opacity:0; transform:translateY(26px) scale(.94);
+  animation:ui-lu-pop .42s cubic-bezier(.2,.9,.3,1.3) forwards;
+  transition:transform .18s ease, box-shadow .18s ease, filter .18s ease;
 }
+/* 그라디언트 네온 테두리(회전 글로우) */
+.ui-lu-card::before{
+  content:""; position:absolute; inset:0; border-radius:18px; padding:1.6px; z-index:-1;
+  background:conic-gradient(from 0deg, #ffd23f, #ff8a3a, #ff5fae, #8a6bff, #5fd0ff, #ffd23f);
+  -webkit-mask:linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite:xor; mask-composite:exclude;
+  opacity:.6; animation:ui-lu-hue 8s linear infinite;
+}
+/* 호버 시 위로 떠오르며 광택 스윕 */
+.ui-lu-card::after{
+  content:""; position:absolute; inset:0; border-radius:18px; z-index:2; pointer-events:none;
+  background:linear-gradient(115deg, transparent 30%, rgba(255,255,255,.28) 48%, transparent 62%);
+  transform:translateX(-120%); transition:transform .55s ease;
+}
+.ui-lu-card:nth-child(2){ animation-delay:.07s; }
+.ui-lu-card:nth-child(3){ animation-delay:.14s; }
 .ui-lu-card:hover{
-  transform:translateY(-6px); background:rgba(34,27,8,.78);
-  border-color:#ffd23f; box-shadow:0 10px 30px rgba(0,0,0,.55),0 0 0 1px rgba(255,210,63,.45),0 0 22px rgba(245,183,60,.35);
+  transform:translateY(-12px) scale(1.04); filter:saturate(1.15);
+  box-shadow:0 22px 48px rgba(0,0,0,.6), 0 0 28px rgba(255,180,80,.5);
+}
+.ui-lu-card:hover::before{ opacity:1; animation-duration:2.5s; }
+.ui-lu-card:hover::after{ transform:translateX(120%); }
+/* 상단 아이콘(보석) */
+.ui-lu-card .ui-lu-icon{
+  position:absolute; top:14px; left:50%; transform:translateX(-50%);
+  font-size:30px; filter:drop-shadow(0 0 12px rgba(255,200,90,.85));
+  animation:ui-lu-float 2.6s ease-in-out infinite;
 }
 .ui-lu-card .ui-lu-idx{
   position:absolute; top:12px; right:12px;
-  width:22px; height:22px; line-height:22px; text-align:center;
-  font-size:12px; font-weight:700; color:#0e1430; border-radius:6px;
-  background:linear-gradient(180deg,#ffe08a,#f5b73c); box-shadow:0 2px 0 rgba(0,0,0,.35);
+  width:24px; height:24px; line-height:24px; text-align:center;
+  font-size:12px; font-weight:800; color:#0e1430; border-radius:7px;
+  background:linear-gradient(180deg,#ffe08a,#f5b73c); box-shadow:0 2px 0 rgba(0,0,0,.4),0 0 10px rgba(255,210,63,.5);
 }
-.ui-lu-card .ui-lu-name{ font-size:22px; font-weight:800; color:#ffe08a; margin-bottom:8px; }
-.ui-lu-card .ui-lu-desc{ font-size:13px; color:rgba(234,242,255,.78); line-height:1.55; }
+.ui-lu-card .ui-lu-name{
+  font-size:22px; font-weight:900; margin-bottom:10px; letter-spacing:.5px;
+  background:linear-gradient(180deg,#fff3c4,#ffce5a); -webkit-background-clip:text; background-clip:text; color:transparent;
+  text-shadow:0 0 18px rgba(255,200,90,.35);
+}
+.ui-lu-card .ui-lu-desc{ font-size:13.5px; color:rgba(234,242,255,.82); line-height:1.6; }
+@keyframes ui-lu-pop{ to{ opacity:1; transform:translateY(0) scale(1); } }
+@keyframes ui-lu-hue{ to{ filter:hue-rotate(360deg); } }
+@keyframes ui-lu-float{ 0%,100%{ transform:translateX(-50%) translateY(0); } 50%{ transform:translateX(-50%) translateY(-5px); } }
 
 /* ----- 보스 보상 스킬 모달 (중앙) ----- */
 #ui-bossreward{
@@ -720,11 +756,11 @@ export const UI = {
     }
   },
 
-  // 현재 던전 층 표시 — "지하 N층" / "B{n}F". 플레이 중 항상 노출.
-  setFloor(n) {
+  // 현재 층 표시 — "N층 · 지역명". 플레이 중 항상 노출.
+  setFloor(n, region) {
     if (!el.floor) return;
     const f = Math.max(1, Math.round(n || 1));
-    el.floor.textContent = `지하 ${f}층 · B${f}F`;
+    el.floor.textContent = region ? `${f}층 · ${region}` : `${f}층`;
     el.floor.classList.remove("ui-hidden");
   },
 
@@ -756,7 +792,7 @@ export const UI = {
 
     const overlay = mk("div", "ui-overlay", el.root); overlay.id = "ui-floorclear";
     const title = mk("div", "ui-fc-title", overlay);
-    title.textContent = `지하 ${f}층 클리어!`;
+    title.textContent = `${f}층 클리어!`;
     const btn = mk("button", "ui-fc-btn", overlay);
     btn.textContent = "다음 층으로 ▶";
 
@@ -783,10 +819,11 @@ export const UI = {
 
   // 레벨 업 스킬 선택 모달. choices=[{name,desc}] (최대 3), onPick(i).
   // 카드 클릭 또는 1·2·3 숫자키로 선택 → onPick 호출 후 자동 닫힘.
-  showLevelUp(choices, onPick) {
+  showLevelUp(choices, onPick, onSkip) {
     if (!el.root || typeof document === "undefined") return;
     const opts = (Array.isArray(choices) ? choices : []).slice(0, 3);
     const pick = typeof onPick === "function" ? onPick : function () {};
+    const skip = typeof onSkip === "function" ? onSkip : null;
 
     // 기존 모달 정리 (재호출 안전)
     UI.hideLevelUp();
@@ -794,7 +831,7 @@ export const UI = {
     const modal = mk("div", "ui-overlay", el.root); modal.id = "ui-levelup";
     const title = mk("div", "ui-lu-title", modal); title.textContent = "레벨 업!";
     const sub = mk("div", "ui-lu-sub", modal);
-    sub.textContent = "스킬을 선택하세요 (1·2·3 또는 클릭)";
+    sub.textContent = skip ? "스킬을 선택하세요 (1·2·3 / 클릭 · 건너뛰기 0)" : "스킬을 선택하세요 (1·2·3 또는 클릭)";
     const cards = mk("div", "ui-lu-cards", modal);
 
     const choose = (i) => {
@@ -802,23 +839,33 @@ export const UI = {
       UI.hideLevelUp();
       pick(i);
     };
+    const doSkip = () => { if (!skip) return; UI.hideLevelUp(); skip(); };
 
     opts.forEach((c, i) => {
       c = c || {};
       const card = mk("div", "ui-lu-card", cards);
+      const icon = mk("div", "ui-lu-icon", card); icon.textContent = ["💎", "🔮", "⚜️", "✨"][i % 4];
       const idx = mk("div", "ui-lu-idx", card); idx.textContent = String(i + 1);
       const name = mk("div", "ui-lu-name", card); name.textContent = c.name || ("스킬 " + (i + 1));
       const desc = mk("div", "ui-lu-desc", card); desc.textContent = c.desc || "";
       card.addEventListener("click", () => choose(i));
     });
 
-    // 숫자키 1/2/3 선택
+    if (skip) {
+      const skBtn = mk("button", "ui-fc-btn", modal);
+      skBtn.textContent = "건너뛰기 (체력+공격 보너스)";
+      skBtn.style.marginTop = "14px";
+      skBtn.addEventListener("click", doSkip);
+    }
+
+    // 숫자키 1/2/3 선택, 0/Esc 건너뛰기
     levelKeyHandler = (e) => {
       const k = e && (e.key || e.keyCode);
       let i = -1;
       if (k === "1" || k === 49) i = 0;
       else if (k === "2" || k === 50) i = 1;
       else if (k === "3" || k === 51) i = 2;
+      else if (skip && (k === "0" || k === 48 || k === "Escape" || k === 27)) { doSkip(); return; }
       if (i >= 0 && i < opts.length) choose(i);
     };
     if (typeof window !== "undefined" && window.addEventListener) {

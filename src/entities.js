@@ -8,15 +8,52 @@ const ENEMY_DEFS = {
   warrior: { name: "해골 전사", model: "warrior", mscale: 1.05, hp: 55, dmg: 11, speed: 2.9, aggro: 18, radius: 0.95, score: 40, barY: 2.9, atkClip: "2H_Melee_Attack_Chop" },
   rogue: { name: "해골 도적", model: "rogue", mscale: 0.95, hp: 30, dmg: 8, speed: 4.5, aggro: 22, radius: 0.7, score: 30, barY: 2.3, atkClip: "1H_Melee_Attack_Stab" },
   caster: { name: "해골 술사", model: "mage", mscale: 1.0, hp: 34, dmg: 9, speed: 2.4, aggro: 26, radius: 0.8, score: 45, barY: 2.6, ranged: true, prefRange: 11, atkClip: "Spellcast_Shoot" },
+  // 신규 생물 잡몹(깊은 층에서 등장)
+  orcling: { name: "오크 병사", model: "orc_enemy", mscale: 0.9, hp: 32, dmg: 8, speed: 3.0, aggro: 20, radius: 0.8, score: 26, barY: 2.4 },
+  wisp: { name: "떠도는 원혼", model: "ghost", mscale: 0.8, hp: 26, dmg: 8, speed: 3.4, aggro: 26, radius: 0.7, score: 28, barY: 2.4, hover: 1.2 },
+  raptor: { name: "랩터", model: "dino", mscale: 0.85, hp: 36, dmg: 10, speed: 4.4, aggro: 24, radius: 0.8, score: 30, barY: 2.3 },
 };
 // 보스: 층마다 순환, 각자 고유 패턴 + 고유 공격 모션
 const BOSS_DEFS = {
-  lord: { name: "해골 군주", model: "warrior", mscale: 2.0, hp: 240, dmg: 18, speed: 2.6, aggro: 200, radius: 1.7, score: 300, barY: 4.5, pattern: "slam", mob: "leap", atkClip: "2H_Melee_Attack_Chop", patClip: "2H_Melee_Attack_Spinning" },
-  archmage: { name: "해골 대마법사", model: "mage", mscale: 1.9, hp: 200, dmg: 13, speed: 2.2, aggro: 200, radius: 1.6, score: 320, barY: 4.4, pattern: "volley", mob: "blink", ranged: true, prefRange: 15, atkClip: "Spellcast_Shoot", patClip: "Spellcast_Long" },
-  reaper: { name: "해골 사신", model: "rogue", mscale: 2.0, hp: 210, dmg: 16, speed: 3.2, aggro: 200, radius: 1.6, score: 340, barY: 4.4, pattern: "charge", mob: null, atkClip: "1H_Melee_Attack_Stab", patClip: "1H_Melee_Attack_Jump_Chop" },
-  necro: { name: "강령술사", model: "minion", mscale: 2.1, hp: 230, dmg: 12, speed: 2.4, aggro: 200, radius: 1.7, score: 360, barY: 4.6, pattern: "summon", mob: "blink", atkClip: "1H_Melee_Attack_Chop", patClip: "Spellcasting" },
+  lord: { name: "해골 군주", model: "warrior", mscale: 2.0, hp: 240, dmg: 18, speed: 2.6, aggro: 200, radius: 1.7, score: 300, barY: 4.5, pattern: "slam", patterns: ["slam", "shockring", "spikes"], mob: "leap", atkClip: "2H_Melee_Attack_Chop", patClip: "2H_Melee_Attack_Spinning" },
+  archmage: { name: "해골 대마법사", model: "mage", mscale: 1.9, hp: 200, dmg: 13, speed: 2.2, aggro: 200, radius: 1.6, score: 320, barY: 4.4, pattern: "volley", patterns: ["volley", "shockring", "barrage"], mob: "blink", ranged: true, prefRange: 15, atkClip: "Spellcast_Shoot", patClip: "Spellcast_Long" },
+  reaper: { name: "해골 사신", model: "rogue", mscale: 2.0, hp: 210, dmg: 16, speed: 3.2, aggro: 200, radius: 1.6, score: 340, barY: 4.4, pattern: "charge", patterns: ["charge", "spikes", "shockring"], mob: null, atkClip: "1H_Melee_Attack_Stab", patClip: "1H_Melee_Attack_Jump_Chop" },
+  necro: { name: "강령술사", model: "minion", mscale: 2.1, hp: 230, dmg: 12, speed: 2.4, aggro: 200, radius: 1.7, score: 360, barY: 4.6, pattern: "summon", patterns: ["summon", "barrage", "spikes"], mob: "blink", atkClip: "1H_Melee_Attack_Chop", patClip: "Spellcasting" },
 };
 const BOSS_ORDER = ["lord", "archmage", "reaper", "necro"];
+
+// 20층 보스 로스터 — 기존 4종 모델을 색/크기/이름/패턴으로 리스킨(신규 모델은 이후 교체).
+// base: 모델·모션 템플릿 / tint: 색조 / mscale·hp·dmg는 base에서 가져오되 일부 상향.
+const FLOOR_BOSSES = [
+  { base: "lord",     model: "orc",           name: "오크 두목" },
+  { base: "archmage", model: "wizard",        name: "고대 술사" },
+  { base: "reaper",   model: "ghost",         name: "원혼",        hover: 1.6 },
+  { base: "lord",     model: "yeti",          name: "설인" },
+  { base: "lord",     model: "golem",         name: "수정 골렘",   mscale: 1.4, hp: 320, hover: 0.8 },
+  { base: "archmage", model: "demon",         name: "화염 악마",   hover: 1.8 },
+  { base: "reaper",   model: "dino",          name: "용아 도마뱀" },
+  { base: "necro",    model: "mushroom_king", name: "버섯 군주" },
+  { base: "lord",     model: "orc",           name: "오크 워로드", mscale: 1.4, hp: 300 },
+  { base: "lord",     model: "golem_evolved", name: "고대 수호자", mscale: 1.4, hp: 380, hover: 1.0 },   // 10층 중간보스
+  { base: "reaper",   model: "ghost_skull",   name: "해골 망령",   hover: 1.6 },
+  { base: "lord",     model: "yeti",          name: "서리 설인",   mscale: 1.3, hp: 340 },
+  { base: "reaper",   model: "dino",          name: "용암 도마뱀", mscale: 1.2 },
+  { base: "necro",    model: "mushroom_king", name: "역병 버섯왕", mscale: 1.2, hp: 360 },
+  { base: "archmage", model: "blue_demon",    name: "황혼 악마" },
+  { base: "reaper",   model: "ghost",         name: "수정 원혼",   hover: 1.6 },
+  { base: "archmage", model: "demon",         name: "지옥 악마",   mscale: 1.4, hp: 420, hover: 2.0 },
+  { base: "lord",     model: "yeti",          name: "영겨울 설인", mscale: 1.4, hp: 440 },
+  { base: "archmage", model: "dragon",        name: "공허 비룡",   mscale: 1.2, hp: 460, hover: 2.2 },
+  { base: "archmage", model: "dragon_evolved", name: "마룡",       mscale: 1.5, hp: 640, hover: 2.4 },     // 20층 최종보스
+];
+function bossDefFor(floor) {
+  const r = FLOOR_BOSSES[(floor - 1) % FLOOR_BOSSES.length];
+  return Object.assign({}, BOSS_DEFS[r.base], r);   // 오버라이드(이름/색/크기/체력)가 우선
+}
+// 층 테마 색조 — 해골형 잡몹을 층 분위기에 맞게 살짝 물들임(실제 생물은 미적용)
+const THEME_TINTS = [0x6fae4a, 0xb070ff, 0x6cb0ff, 0xeaf2ff, 0x9fd0ff, 0xff8a3a, 0xff4b2e, 0x9bd14a, 0xc8b080, 0xffd24a,
+                     0x5a6080, 0xaee6ff, 0xff6a3a, 0x7fbf4a, 0xc56bff, 0x66f0e0, 0xff5a1e, 0xeaf4ff, 0x9a6bff, 0xb02018];
+function themeTint(floor) { return THEME_TINTS[(floor - 1) % THEME_TINTS.length]; }
 
 function makeHealthBar(w) {
   const g = new THREE.Group();
@@ -31,6 +68,7 @@ export function createWorld(ctx) {
   const { scene, terrainHeight, getPlayer, camera, CLIP } = ctx;
   const enemies = [];
   let boss = null, curMult = 1, arena = 70;
+  let trashTotal = 0, trashKilled = 0;   // 잡몹 처치율로 보스 봉인 해제
   const tmp = new THREE.Vector3();
 
   function actionsFor(obj, gltf) {
@@ -50,7 +88,8 @@ export function createWorld(ctx) {
   function play(ent, key, opts) {
     opts = opts || {};
     const loop = opts.loop !== false, fade = opts.fade == null ? 0.2 : opts.fade;
-    const name = CLIP[key] || key;
+    const map = ent.clips || CLIP;                 // 모델별 클립 매핑(신규 생물은 Quaternius 규격)
+    const name = map[key] || CLIP[key] || key;
     const a = ent.anim.acts[name];
     if (!a || ent.anim.cur === a) return;
     if (ent.anim.cur) ent.anim.cur.fadeOut(fade);
@@ -59,20 +98,26 @@ export function createWorld(ctx) {
   }
   // 적/보스 공격: 클립별로 다른 전신 모션을 한 번 재생(끝나면 AI가 idle/walk로 복귀)
   function playAttack(e, clip, dur) {
-    const a = e.anim.acts[clip] || e.anim.acts[CLIP.attack];
+    const map = e.clips || CLIP;
+    const a = e.anim.acts[clip] || e.anim.acts[map.attack] || e.anim.acts[CLIP.attack];
     if (!a) return;
     if (e.anim.cur && e.anim.cur !== a) e.anim.cur.fadeOut(0.08);
     a.reset(); a.setLoop(THREE.LoopOnce, 1); a.clampWhenFinished = true; a.fadeIn(0.08).play();
     e.anim.cur = a; e.atkAnim = dur || 0.55;
   }
 
-  function spawnEnemy(def, x, z, mult, isBoss) {
+  function spawnEnemy(def, x, z, mult, isBoss, tint) {
     const M = ctx.monsters[def.model];
     const obj = cloneSkeleton(M.gltf.scene);
     obj.scale.setScalar(M.scale * def.mscale);
+    // 실제 생물 모델(Quaternius)은 고유 색이 있으니 테마 색조를 입히지 않음(해골 리스킨에만 적용)
+    const col = M.creature ? (def.tint != null ? def.tint : null) : (tint != null ? tint : def.tint);
     const mats = [];   // 적별 머티리얼 복제(개별 피격 플래시용 — 공유 머티리얼이면 전부 깜빡임)
-    obj.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.frustumCulled = false; if (o.material) { o.material = o.material.clone(); mats.push(o.material); } } });
-    obj.position.set(x, terrainHeight(x, z), z);
+    obj.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.frustumCulled = false; if (o.material) { o.material = o.material.clone(); if (col != null && o.material.color) o.material.color.lerp(new THREE.Color(col), 0.55); mats.push(o.material); } } });
+    // 모델 원점이 발바닥(표준 캐릭터 리그)이라 접지는 terrainHeight로 충분. 비행 생물만 def.hover로 부양.
+    // (스킨드 메시는 Box3.setFromObject가 실제 자세를 반영하지 못해 접지 보정에 쓰면 안 됨)
+    const hover = def.hover || 0;
+    obj.position.set(x, terrainHeight(x, z) + hover, z);
     scene.add(obj);
     const bar = makeHealthBar(def.radius * 1.7); bar.position.y = def.barY; obj.add(bar);
     const e = {
@@ -84,6 +129,11 @@ export function createWorld(ctx) {
       patternCd: isBoss ? 2.5 : 0, telegraph: 0, charge: 0, chargeDir: new THREE.Vector3(), chargeHit: false,
       mobCd: isBoss ? 5 : 0, leap: 0, leapDir: new THREE.Vector3(), leapSpeed: 0, leapHit: false,
       zoneCd: isBoss ? 3.5 : 0, volleyAlt: false, mats: mats, flash: 0,
+      sealed: !!isBoss,   // 보스: 잡몹 처치 전까지 봉인(피해 대폭 감소)
+      burn: 0, burnDps: 0, poison: 0, poisonDps: 0, poisonStk: 0, slow: 0, shock: 0, _dotAcc: 0,
+      clips: M.clips || null, hover: hover,            // 모델별 클립 매핑 + 접지/부양 높이
+      atkClip: def.atkClip || (M.clips && M.clips.attack),
+      patClip: def.patClip || (M.clips && M.clips.attack) || def.atkClip,
     };
     play(e, "idle"); enemies.push(e); return e;
   }
@@ -102,15 +152,22 @@ export function createWorld(ctx) {
     if (floor >= 1) pool.push(["rogue", Math.min(4, 1 + floor)]);
     if (floor >= 2) pool.push(["warrior", Math.min(4, floor)]);
     if (floor >= 2) pool.push(["caster", Math.min(4, floor - 1)]);
+    if (floor >= 3) pool.push(["orcling", Math.min(5, floor - 1)]);   // 깊은 층: 생물 잡몹 혼입
+    if (floor >= 5) pool.push(["wisp", Math.min(4, floor - 3)]);
+    if (floor >= 7) pool.push(["raptor", Math.min(4, floor - 5)]);
     const bag = []; pool.forEach(([k, w]) => { for (let i = 0; i < w; i++) bag.push(k); });
+    const tint = themeTint(floor);                   // 층 테마 색(잡몹·보스 통일감)
     for (let i = 0; i < n; i++) {
       const k = bag[(Math.random() * bag.length) | 0] || "minion";
-      const p = rndPlace(14, lim); spawnEnemy(ENEMY_DEFS[k], p[0], p[1], curMult);
+      const p = rndPlace(14, lim); spawnEnemy(ENEMY_DEFS[k], p[0], p[1], curMult, false, tint);
     }
-    const bdef = BOSS_DEFS[BOSS_ORDER[(floor - 1) % BOSS_ORDER.length]];
+    trashTotal = n; trashKilled = 0;
+    const bdef = bossDefFor(floor);
     const bp = rndPlace(Math.min(28, lim - 6), lim);
     boss = spawnEnemy(bdef, bp[0], bp[1], 1 + 0.3 * (floor - 1), true);
+    if (ctx.onSealInfo) ctx.onSealInfo(true, 0, sealGoal());
   }
+  function sealGoal() { return Math.max(1, Math.ceil(trashTotal * 0.65)); }   // 잡몹 65% 처치 시 봉인 해제
 
   // ---------- 전투 ----------
   function playerAttack(dmg, isCrit, reach) {
@@ -129,6 +186,14 @@ export function createWorld(ctx) {
   }
   function hitEnemy(e, dmg, isCrit) {
     if (!e || e.dead) return;
+    if (e.shock > 0) dmg = Math.round(dmg * 1.25);   // 감전: 받는 피해 +25%
+    if (e.isBoss && e.sealed) {                        // 봉인된 보스는 피해 대폭 감소(잡몹부터 처치 유도)
+      dmg = Math.max(1, Math.round(dmg * 0.12));
+      e.hp = Math.max(1, e.hp - dmg); e.bar.visible = true; e.flash = 0.12;
+      ctx.onDamageNumber(e.obj.position, e.def.barY, dmg, "block");
+      if (ctx.fxRing) ctx.fxRing(e.obj.position, e.def.radius * 2.4, 0x8a7bff);
+      return;
+    }
     e.hp = Math.max(0, e.hp - dmg); e.bar.visible = true; e.flash = 0.12;   // 피격 시 흰 발광 플래시
     ctx.onDamageNumber(e.obj.position, e.def.barY, dmg, isCrit ? "crit" : "hit");
     if (ctx.fxHit) ctx.fxHit(e.obj.position, isCrit ? 0xffd23f : 0xfff1a8);
@@ -142,7 +207,24 @@ export function createWorld(ctx) {
     play(e, "death", { loop: false, fade: 0.15 });
     const idx = enemies.indexOf(e); if (idx >= 0) enemies.splice(idx, 1);
     setTimeout(() => scene.remove(e.obj), 2500);
-    if (e.isBoss) { boss = null; ctx.onBossKilled(); } else ctx.onEnemyKilled(e.def.name, e.score);
+    if (e.isBoss) { boss = null; ctx.onBossKilled(); }
+    else {
+      ctx.onEnemyKilled(e.def.name, e.score);
+      trashKilled++;
+      if (boss && boss.sealed) {
+        if (trashKilled >= sealGoal()) { boss.sealed = false; if (ctx.onSealInfo) ctx.onSealInfo(false, trashKilled, sealGoal()); }
+        else if (ctx.onSealInfo) ctx.onSealInfo(true, trashKilled, sealGoal());
+      }
+    }
+  }
+  // 상태이상 부여(원소 차별화): fire=화상, poison=중독(중첩), ice=둔화, lightning=감전
+  function applyStatus(e, kind, opt) {
+    if (!e || e.dead) return;
+    opt = opt || {};
+    if (kind === "fire") { e.burn = Math.max(e.burn, opt.dur || 3); e.burnDps = Math.max(e.burnDps, opt.dps || 8); }
+    else if (kind === "poison") { e.poison = Math.max(e.poison, opt.dur || 4); e.poisonStk = Math.min(6, e.poisonStk + 1); e.poisonDps = Math.max(e.poisonDps, opt.dps || 5); }
+    else if (kind === "ice" || kind === "frost") { e.slow = Math.max(e.slow, opt.dur || 2.5); }
+    else if (kind === "lightning" || kind === "shock") { e.shock = Math.max(e.shock, opt.dur || 2.5); }
   }
   function nearestNpc() { return null; }
   function stunNearby(pos, radius, dur) {
@@ -150,7 +232,7 @@ export function createWorld(ctx) {
   }
 
   // ---------- AI 헬퍼 ----------
-  function faceMove(e, dir, sp, dt) { e.obj.position.addScaledVector(dir, sp * dt); e.obj.rotation.y = Math.atan2(dir.x, dir.z); }
+  function faceMove(e, dir, sp, dt) { const m = e.slow > 0 ? 0.5 : 1; e.obj.position.addScaledVector(dir, sp * m * dt); e.obj.rotation.y = Math.atan2(dir.x, dir.z); }
 
   function meleeAI(e, dt, d, toP) {
     if (d < e.def.aggro) {
@@ -158,7 +240,7 @@ export function createWorld(ctx) {
       else {
         e.obj.rotation.y = Math.atan2(toP.x, toP.z);
         if (e.atkCd <= 0) {
-          e.atkCd = e.def.speed > 3.5 ? 1.1 : 1.6; playAttack(e, e.def.atkClip); const dmg = e.dmg;
+          e.atkCd = e.def.speed > 3.5 ? 1.1 : 1.6; playAttack(e, e.atkClip); const dmg = e.dmg;
           setTimeout(() => { if (!e.dead && e.stun <= 0 && getPlayer() && e.obj.position.distanceTo(getPlayer().position) < 3.0) ctx.onPlayerHit(dmg); }, 300);
         } else if (e.atkAnim <= 0) { play(e, "idle"); }
       }
@@ -171,7 +253,7 @@ export function createWorld(ctx) {
       else if (d > pr * 1.15) { toP.normalize(); faceMove(e, toP, e.def.speed, dt); play(e, "walk"); }
       else { e.obj.rotation.y = Math.atan2(toP.x, toP.z); if (e.atkAnim <= 0) play(e, "idle"); }
       if (e.atkCd <= 0 && d < pr * 1.7) {
-        e.atkCd = e.isBoss ? 1.6 : 2.0; playAttack(e, e.def.atkClip, 0.7);
+        e.atkCd = e.isBoss ? 1.6 : 2.0; playAttack(e, e.atkClip, 0.7);
         const o = e.obj.position.clone(); o.y += 1.4;
         const pc = getPlayer().position.clone(); pc.y += 1.0;
         const dir = pc.sub(o).normalize();   // 3D 조준(점프한 플레이어도 맞힘)
@@ -191,28 +273,60 @@ export function createWorld(ctx) {
   }
 
   // ---------- 보스 고유 패턴 ----------
+  function patOk(p, d) {
+    if (p === "slam") return d < 11;
+    if (p === "charge") return d > 2.5 && d < 26;
+    return true;   // 원거리 패턴(shockring/volley/barrage/spikes/summon)은 거리 무관
+  }
   function bossPattern(e, dt, d) {
     if (e.telegraph > 0) { e.telegraph -= dt; if (e.telegraph <= 0) slamHit(e); return; }
     if (e.charge > 0) return;
     e.patternCd -= dt;
     if (e.patternCd > 0) return;
-    const pat = e.def.pattern;
-    if (pat === "slam" && d < 11) { e.patternCd = 4.5; e.telegraph = 0.6; playAttack(e, e.def.patClip, 1.0); ctx.fxRing(e.obj.position, 6, 0xffcc55); }
-    else if (pat === "volley") { e.patternCd = 3.0; if (e.volleyAlt) ringBurst(e, 12); else volley(e, 5); e.volleyAlt = !e.volleyAlt; }
-    else if (pat === "charge" && d > 2.5 && d < 26) { e.patternCd = 3.6; e.charge = 0.6; e.chargeHit = false; playAttack(e, e.def.patClip, 0.6); e.chargeDir.subVectors(getPlayer().position, e.obj.position).setY(0).normalize(); }
-    else if (pat === "summon") { e.patternCd = 6.5; playAttack(e, e.def.patClip, 0.9); summon(e, 2); ctx.fxRing(e.obj.position, 3, 0x8a4fff); }
+    const enr = e.hp / e.maxHp < 0.4;   // 광폭화: 저체력 시 패턴이 잦아지고 강해짐
+    const cdK = enr ? 0.6 : 1;
+    const list = (e.def.patterns || [e.def.pattern]).filter((p) => patOk(p, d));
+    const pat = list.length ? list[(Math.random() * list.length) | 0] : null;
+    if (pat === "slam") { e.patternCd = 4.5 * cdK; e.telegraph = 0.6; playAttack(e, e.patClip, 1.0); ctx.fxRing(e.obj.position, 6, 0xffcc55); }
+    else if (pat === "volley") { e.patternCd = 3.0 * cdK; volley(e, enr ? 7 : 5); }
+    else if (pat === "charge") { e.patternCd = 3.6 * cdK; e.charge = 0.6; e.chargeHit = false; playAttack(e, e.patClip, 0.6); e.chargeDir.subVectors(getPlayer().position, e.obj.position).setY(0).normalize(); }
+    else if (pat === "summon") { e.patternCd = 6.5 * cdK; playAttack(e, e.patClip, 0.9); summon(e, enr ? 3 : 2); ctx.fxRing(e.obj.position, 3, 0x8a4fff); }
+    else if (pat === "shockring") { e.patternCd = 3.4 * cdK; ringBurst(e, enr ? 16 : 11); }
+    else if (pat === "barrage") { e.patternCd = 3.8 * cdK; barrage(e, enr ? 9 : 6); }
+    else if (pat === "spikes") { e.patternCd = 4.0 * cdK; spikeField(e, enr ? 4 : 3); }
+  }
+  // 광역 산탄(부채꼴 다발 투사체)
+  function barrage(e, n) {
+    playAttack(e, e.patClip || e.atkClip || "Spellcast_Shoot", 1.0);
+    const base = tmp.subVectors(getPlayer().position, e.obj.position).setY(0).normalize();
+    const baseAng = Math.atan2(base.x, base.z);
+    const o = e.obj.position.clone(); o.y += 1.6;
+    for (let i = 0; i < n; i++) {
+      const a = baseAng + (i - (n - 1) / 2) * 0.16;
+      setTimeout(() => { if (!e.dead) ctx.spawnEnemyProjectile(o.clone(), { x: Math.sin(a), z: Math.cos(a) }, e.dmg); }, 120 + i * 50);
+    }
+  }
+  // 대지 가시: 플레이어 주변에 다중 텔레그래프 장판(가만히 있으면 위험)
+  function spikeField(e, n) {
+    playAttack(e, e.patClip || e.atkClip, 0.9);
+    const pc = getPlayer().position.clone();
+    for (let k = 0; k < n; k++) {
+      const a = Math.random() * Math.PI * 2, r = Math.random() * 6;
+      const x = pc.x + Math.cos(a) * r, z = pc.z + Math.sin(a) * r;
+      if (ctx.bossAoE) ctx.bossAoE(new THREE.Vector3(x, terrainHeight(x, z), z), 3.5, Math.round(e.dmg * 1.2), 1.0);
+    }
   }
   function slamHit(e) {
     ctx.fxRing(e.obj.position, 6.5, 0xff7a30);
     if (getPlayer() && e.obj.position.distanceTo(getPlayer().position) < 6.5) ctx.onPlayerHit(Math.round(e.dmg * 1.5));
   }
   function ringBurst(e, n) {
-    playAttack(e, e.def.atkClip || "Spellcast_Shoot", 0.8);
+    playAttack(e, e.atkClip || "Spellcast_Shoot", 0.8);
     const o = e.obj.position.clone(); o.y += 1.5;
     for (let i = 0; i < n; i++) { const a = (i / n) * Math.PI * 2; ctx.spawnEnemyProjectile(o.clone(), { x: Math.sin(a), y: 0, z: Math.cos(a) }, e.dmg); }
   }
   function volley(e, n) {
-    playAttack(e, e.def.atkClip || "Spellcast_Shoot", 0.8);
+    playAttack(e, e.atkClip || "Spellcast_Shoot", 0.8);
     const base = tmp.subVectors(getPlayer().position, e.obj.position).setY(0).normalize();
     const baseAng = Math.atan2(base.x, base.z);
     const o = e.obj.position.clone(); o.y += 1.6;
@@ -232,7 +346,7 @@ export function createWorld(ctx) {
     e.leap = 0.55; e.leapHit = false;
     e.leapDir.subVectors(getPlayer().position, e.obj.position).setY(0).normalize();
     e.leapSpeed = Math.max(2, d - 3) / 0.55;
-    playAttack(e, e.def.patClip || e.def.atkClip, 0.7);
+    playAttack(e, e.patClip || e.atkClip, 0.7);
   }
   function doBlink(e) {
     ctx.fxRing(e.obj.position, 2.4, 0x9b6bff);
@@ -256,6 +370,21 @@ export function createWorld(ctx) {
       e.anim.mixer.update(dt);
       if (e.flash > 0) { e.flash -= dt; const k = Math.max(0, e.flash / 0.12) * 0.9; for (let mi = 0; mi < e.mats.length; mi++) if (e.mats[mi].emissive) e.mats[mi].emissive.setScalar(k); }
       if (e.dead) continue;
+      // 상태이상: 화상/중독 지속피해 + 타이머 감소
+      if (e.burn > 0 || e.poison > 0) {
+        e._dotAcc += dt;
+        if (e._dotAcc >= 0.5) {
+          e._dotAcc = 0;
+          let d = 0;
+          if (e.burn > 0) d += e.burnDps * 0.5;
+          if (e.poison > 0) d += e.poisonDps * e.poisonStk * 0.5;
+          if (d > 0) { hitEnemy(e, Math.round(d), false); if (e.dead) continue; }
+        }
+      }
+      if (e.burn > 0) e.burn -= dt;
+      if (e.poison > 0) { e.poison -= dt; if (e.poison <= 0) e.poisonStk = 0; }
+      if (e.slow > 0) e.slow -= dt;
+      if (e.shock > 0) e.shock -= dt;
       // 체력바 빌보드
       if (e.bar.visible) {
         e.bar.quaternion.copy(camera.quaternion);
@@ -263,7 +392,7 @@ export function createWorld(ctx) {
         f.scale.x = Math.max(0.001, ratio); f.position.x = -(1 - ratio) * (e.bar.userData.w / 2);
         f.material.color.setHex(ratio > 0.5 ? 0x49d65a : ratio > 0.25 ? 0xe0b000 : 0xd63b3b);
       }
-      if (e.stun > 0) { e.stun -= dt; play(e, "idle"); e.obj.position.y = terrainHeight(e.obj.position.x, e.obj.position.z); continue; }
+      if (e.stun > 0) { e.stun -= dt; play(e, "idle"); e.obj.position.y = terrainHeight(e.obj.position.x, e.obj.position.z) + e.hover; continue; }
       // 보스 도약(점프 돌진) 진행 중
       if (e.leap > 0) {
         e.leap -= dt;
@@ -311,13 +440,14 @@ export function createWorld(ctx) {
       } else {
         meleeAI(e, dt, d, toP);
       }
-      e.obj.position.y = terrainHeight(e.obj.position.x, e.obj.position.z);
+      e.obj.position.y = terrainHeight(e.obj.position.x, e.obj.position.z) + e.hover;
     }
   }
 
   return {
-    update, playerAttack, nearestNpc, nearestEnemy, startFloor, enemies, stunNearby,
+    update, playerAttack, nearestNpc, nearestEnemy, startFloor, enemies, stunNearby, applyStatus,
     applyDamage: (e, dmg, crit) => hitEnemy(e, dmg, crit),
     get boss() { return boss; },
+    get bossSealed() { return boss ? boss.sealed : false; },
   };
 }
