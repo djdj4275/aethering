@@ -834,12 +834,17 @@ export const UI = {
     sub.textContent = skip ? "스킬을 선택하세요 (1·2·3 / 클릭 · 건너뛰기 0)" : "스킬을 선택하세요 (1·2·3 또는 클릭)";
     const cards = mk("div", "ui-lu-cards", modal);
 
+    // 보스 처치 직후 연타로 인한 즉시 오선택 방지: 개봉 후 잠깐(450ms)은 선택을 무시한다.
+    const openedAt = Date.now();
+    const ARM_MS = 450;
+    const armed = () => Date.now() - openedAt >= ARM_MS;
     const choose = (i) => {
+      if (!armed()) return;
       if (i < 0 || i >= opts.length) return;
       UI.hideLevelUp();
       pick(i);
     };
-    const doSkip = () => { if (!skip) return; UI.hideLevelUp(); skip(); };
+    const doSkip = () => { if (!skip || !armed()) return; UI.hideLevelUp(); skip(); };
 
     opts.forEach((c, i) => {
       c = c || {};
@@ -904,7 +909,11 @@ export const UI = {
     sub.textContent = "1·2·3 또는 클릭";
     const cards = mk("div", "ui-br-cards", modal);
 
+    // 보스 처치 직후 연타로 인한 즉시 오선택 방지: 개봉 후 잠깐(450ms)은 선택을 무시한다.
+    const openedAt = Date.now();
+    const ARM_MS = 450;
     const choose = (i) => {
+      if (Date.now() - openedAt < ARM_MS) return;
       if (i < 0 || i >= opts.length) return;
       UI.hideBossReward();
       pick(i);

@@ -229,6 +229,12 @@ addEventListener("keyup", (e) => { keys[e.code] = false; });
 // 카메라 궤도 + 클릭 공격 구분
 const cam = { yaw: 0, pitch: 0.35, dist: 8 };
 let camReady = false;
+// 이동 시 카메라 자동 추적: 전진(W 성분) 이동 중 카메라가 진행 방향 뒤로 부드럽게 따라온다.
+// 수동 드래그/터치로 시점을 돌리면 CAM_MANUAL_GRACE초 동안 자동추적을 멈춰 조준을 방해하지 않는다.
+const AUTO_FOLLOW_CAM = true;     // 자동 추적 끄려면 false
+const CAM_FOLLOW_RATE = 2.6;      // 클수록 빨리 따라옴(작을수록 느슨한 트레일)
+const CAM_MANUAL_GRACE = 1.2;     // 수동 회전 후 자동추적 양보 시간(초)
+let camManualT = 0;
 let dragging = false, dragMoved = 0, downT = 0, downX = 0, downY = 0;
 const el = renderer.domElement;
 el.addEventListener("contextmenu", (e) => e.preventDefault());   // 우클릭 메뉴 방지(스킬용)
@@ -241,8 +247,10 @@ addEventListener("mouseup", (e) => {
   if (dragging && dragMoved < 6 && performance.now() - downT < 260) attack();
   dragging = false;
 });
-// 클래스 스킬(패링/구르기/블링크)은 우클릭. Q/W/E/R은 보스 보상 액티브 스킬.
-const ACTIVE_KEYS = { KeyQ: 0, KeyW: 1, KeyE: 2, KeyR: 3 };
+// 클래스 스킬(패링/구르기/블링크)은 F / 우클릭. 1·2·3·4는 보스 보상 액티브 스킬.
+// (이전엔 Q·W·E·R이었으나 W가 전진 이동키와 겹쳐 1~4 숫자키로 옮김. 드래프트 1·2·3 선택과는
+//  castActive의 paused 가드로 충돌하지 않는다.)
+const ACTIVE_KEYS = { Digit1: 0, Digit2: 1, Digit3: 2, Digit4: 3 };
 addEventListener("keydown", (e) => {
   if (e.repeat) return;
   if (e.code in ACTIVE_KEYS) castActive(ACTIVE_KEYS[e.code]);
@@ -253,11 +261,12 @@ addEventListener("mousemove", (e) => {
   dragMoved += Math.abs(e.movementX) + Math.abs(e.movementY);
   cam.yaw -= e.movementX * 0.004;
   cam.pitch = THREE.MathUtils.clamp(cam.pitch + e.movementY * 0.004, -0.2, 1.2);
+  camManualT = CAM_MANUAL_GRACE;   // 수동 회전 중엔 자동추적 양보
 });
 el.addEventListener("wheel", (e) => { cam.dist = THREE.MathUtils.clamp(cam.dist + e.deltaY * 0.01, 4, 18); e.preventDefault(); }, { passive: false });
 // 터치(간단)
 el.addEventListener("touchstart", (e) => { dragging = true; dragMoved = 0; const t = e.touches[0]; downX = t.clientX; downY = t.clientY; }, { passive: true });
-addEventListener("touchmove", (e) => { if (!dragging) return; const t = e.touches[0]; cam.yaw -= (t.clientX - downX) * 0.01; cam.pitch = THREE.MathUtils.clamp(cam.pitch + (t.clientY - downY) * 0.01, -0.2, 1.2); downX = t.clientX; downY = t.clientY; }, { passive: true });
+addEventListener("touchmove", (e) => { if (!dragging) return; const t = e.touches[0]; cam.yaw -= (t.clientX - downX) * 0.01; cam.pitch = THREE.MathUtils.clamp(cam.pitch + (t.clientY - downY) * 0.01, -0.2, 1.2); downX = t.clientX; downY = t.clientY; camManualT = CAM_MANUAL_GRACE; }, { passive: true });
 addEventListener("touchend", () => { dragging = false; });
 
 // ---------- 플레이어 / 애니메이션 ----------
@@ -640,13 +649,22 @@ function updateMeteors(dt) {
     const mt = meteors[i];
     if (mt.delay > 0) { mt.delay -= dt; continue; }
     mt.mesh.position.y -= 62 * dt;
-    spawnTrailPuff(mt.mesh.position, 0xff7a2a, 1.6, 0.4, TEX.glow);   // 화염 꼬리
-    if (Math.random() < 0.5) spawnSparks(mt.mesh.position.clone(), 0xffb060, 2, 5);
+    if (mt.arrow) {                                                  // 화살(궁수): 화염 꼬리 대신 가벼운 잔광
+      if (Math.random() < 0.4) spawnSparks(mt.mesh.position.clone(), 0xcfe0f5, 1, 4);
+    } else {
+      spawnTrailPuff(mt.mesh.position, 0xff7a2a, 1.6, 0.4, TEX.glow);   // 화염 꼬리(메테오)
+      if (Math.random() < 0.5) spawnSparks(mt.mesh.position.clone(), 0xffb060, 2, 5);
+    }
     if (mt.mesh.position.y <= mt.gy + 0.6) {
       const pos = new THREE.Vector3(mt.x, mt.gy + 0.5, mt.z);
-      spawnExplosion(pos, mt.radius); fxRing(pos, mt.radius, 0xff7a2a); spawnBurst(pos, 0x8a5030, 16, 11, 0.32, 0.7);
-      if (world) for (const e of world.enemies.slice()) if (!e.dead && e.obj.position.distanceTo(pos) < mt.radius + e.def.radius) { world.applyDamage(e, mt.dmg, true); if (world.applyStatus) world.applyStatus(e, "fire", { dur: 3, dps: Math.max(6, Math.round(mt.dmg * 0.1)) }); }
-      addShake(1.0); scene.remove(mt.mesh); meteors.splice(i, 1);
+      if (mt.arrow) {                                               // 화살 착탄: 작은 충격(불꽃폭발·흔들림 없음)
+        fxRing(pos, mt.radius, 0xbcd4f0); spawnSparks(pos, 0xdfe9f5, 6, 7);
+      } else {                                                      // 메테오 착탄: 불꽃 폭발 + 강한 흔들림
+        spawnExplosion(pos, mt.radius); fxRing(pos, mt.radius, 0xff7a2a); spawnBurst(pos, 0x8a5030, 16, 11, 0.32, 0.7);
+      }
+      if (world) for (const e of world.enemies.slice()) if (!e.dead && e.obj.position.distanceTo(pos) < mt.radius + e.def.radius) { world.applyDamage(e, mt.dmg, true); if (!mt.arrow && world.applyStatus) world.applyStatus(e, "fire", { dur: 3, dps: Math.max(6, Math.round(mt.dmg * 0.1)) }); }
+      if (!mt.arrow) addShake(1.0);                                 // 화살은 발마다 흔들지 않음(연속 착탄 시 시점 붕괴 방지)
+      scene.remove(mt.mesh); meteors.splice(i, 1);
     }
   }
 }
@@ -658,7 +676,8 @@ function arrowRain(dmg, radius, count) {
     const tx = c.x + (Math.random() - 0.5) * radius * 1.7, tz = c.z + (Math.random() - 0.5) * radius * 1.7, gy = terrainHeight(tx, tz);
     const m = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 1.2, 5), new THREE.MeshBasicMaterial({ color: 0xdfe9f5 }));
     m.position.set(tx, gy + 28, tz); scene.add(m);
-    meteors.push({ mesh: m, x: tx, z: tz, gy: gy, dmg: dmg, radius: 2.0, delay: i * 0.05 });
+    // arrow:true → updateMeteors가 화살용 가벼운 연출/착탄을 쓴다(메테오의 불꽃폭발·강한 흔들림 공유 금지).
+    meteors.push({ mesh: m, x: tx, z: tz, gy: gy, dmg: dmg, radius: 2.0, delay: i * 0.05, arrow: true });
   }
   addShake(0.4);
 }
@@ -1465,7 +1484,7 @@ const ACTIVE_SKILLS = [
   { id: "a_grapple", tier: "gold", cls: ARCHER, name: "갈고리 이동사격", desc: "갈고리로 비행하며 화살을 난사", cd: 13, cast: () => grappleShot(16 + LV() * 3, 14) },
   { id: "a_grapplestrike", tier: "prism", cls: ARCHER, name: "강습 사격", desc: "고속 갈고리 비행 + 집중 난사", cd: 18, cast: () => { grappleShot(22 + LV() * 4, 18); } },
 ];
-function slotKey(i) { return ["Q", "W", "E", "R"][i]; }
+function slotKey(i) { return ["1", "2", "3", "4"][i]; }
 function refreshActives() { UI.setActives(GAME.actives.map((s, i) => ({ key: slotKey(i), name: s ? s.skill.name : null, cdRatio: s ? s.cd / s.skill.cd : 0 }))); }
 function castActive(i) {
   if (!GAME.started || paused || GAME.dead) return;
@@ -1720,6 +1739,16 @@ function update(dt) {
     let d = targetRot - player.rotation.y;
     while (d > Math.PI) d -= Math.PI * 2; while (d < -Math.PI) d += Math.PI * 2;
     player.rotation.y += d * Math.min(1, dt * 12);
+  }
+
+  // 이동 중 카메라 자동 추적: 전진(W 성분) 이동이면 카메라가 캐릭터 등 뒤로 부드럽게 따라온다.
+  // 순수 좌우 스트레이프(A/D만)·후진(S)은 시점을 고정해 둔다. 수동 드래그 직후엔 양보(camManualT).
+  if (camManualT > 0) camManualT -= dt;
+  if (AUTO_FOLLOW_CAM && moving && iz < 0 && camManualT <= 0 &&
+      grappleT <= 0 && dashTime <= 0 && !GAME.dead) {
+    let cd = (player.rotation.y + Math.PI) - cam.yaw;   // 캐릭터 등 뒤를 향하도록
+    while (cd > Math.PI) cd -= Math.PI * 2; while (cd < -Math.PI) cd += Math.PI * 2;
+    cam.yaw += cd * Math.min(1, dt * CAM_FOLLOW_RATE);
   }
 
   // 점프 / 중력 / 접지
