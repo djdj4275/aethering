@@ -232,22 +232,23 @@ let camReady = false;
 // 이동 시 카메라 자동 추적: 전진(W 성분) 이동 중 카메라가 진행 방향 뒤로 부드럽게 따라온다.
 // 수동 드래그/터치로 시점을 돌리면 CAM_MANUAL_GRACE초 동안 자동추적을 멈춰 조준을 방해하지 않는다.
 const AUTO_FOLLOW_CAM = true;     // 자동 추적 끄려면 false
-const CAM_FOLLOW_RATE = 2.6;      // 클수록 빨리 따라옴(작을수록 느슨한 트레일)
-const CAM_MANUAL_GRACE = 1.2;     // 수동 회전 후 자동추적 양보 시간(초)
+const CAM_FOLLOW_RATE = 7.0;      // 클수록 빨리 따라옴(작을수록 느슨한 트레일)
+const CAM_MANUAL_GRACE = 1.0;     // 수동(우클릭) 회전 후 자동추적 양보 시간(초)
 let camManualT = 0;
 let dragging = false, dragMoved = 0, downT = 0, downX = 0, downY = 0;
 const el = renderer.domElement;
-el.addEventListener("contextmenu", (e) => e.preventDefault());   // 우클릭 메뉴 방지(스킬용)
+el.addEventListener("contextmenu", (e) => e.preventDefault());   // 우클릭 메뉴 방지(시점 드래그용)
 el.addEventListener("mousedown", (e) => {
-  if (e.button === 2) { skillDown(); return; }                   // 우클릭 = 클래스 스킬
-  dragging = true; dragMoved = 0; downT = performance.now(); downX = e.clientX; downY = e.clientY;
+  if (e.button === 2) {                                          // 우클릭 = 시점 회전 드래그
+    dragging = true; dragMoved = 0; downX = e.clientX; downY = e.clientY; return;
+  }
+  if (e.button === 0) downT = performance.now();                 // 좌클릭 = 공격(타이밍 기록)
 });
 addEventListener("mouseup", (e) => {
-  if (e.button === 2) { skillUp(); return; }
-  if (dragging && dragMoved < 6 && performance.now() - downT < 260) attack();
-  dragging = false;
+  if (e.button === 2) { dragging = false; return; }              // 시점 드래그 종료
+  if (e.button === 0 && performance.now() - downT < 400) attack();   // 좌클릭 = 공격
 });
-// 클래스 스킬(패링/구르기/블링크)은 F / 우클릭. 1·2·3·4는 보스 보상 액티브 스킬.
+// 클래스 스킬(패링/구르기/블링크)은 F 키. 우클릭은 시점 회전. 1·2·3·4는 보스 보상 액티브 스킬.
 // (이전엔 Q·W·E·R이었으나 W가 전진 이동키와 겹쳐 1~4 숫자키로 옮김. 드래프트 1·2·3 선택과는
 //  castActive의 paused 가드로 충돌하지 않는다.)
 const ACTIVE_KEYS = { Digit1: 0, Digit2: 1, Digit3: 2, Digit4: 3 };
@@ -1523,7 +1524,7 @@ function openBossReward(cont) {
   if (!ch.length) { paused = false; cont && cont(); return; }
   UI.showBossReward(ch.map((s) => ({ name: s.name, tier: s.tier, desc: s.desc, cd: s.cd })), (idx) => {
     equipSkill(ch[idx], () => { cont && cont(); });   // paused는 다음 층 진입(enterFloor)에서 해제
-  });
+  }, () => { cont && cont(); });                       // 건너뛰기: 획득 없이 진행
 }
 function onBossKilled() {
   GAME.gold += 50 * GAME.floor; UI.setGold(GAME.gold);
@@ -1670,15 +1671,15 @@ Promise.all([
   const CHARS = {
     knight: { gltf: gKnight, key: "knight", name: "기사", role: "근접·패링", hp: 170, dmg: 16, speed: 6.5, windup: 170, atkInterval: 0.36,
       atkType: "melee", atkClip: "1H_Melee_Attack_Slice_Diagonal",
-      skill: "parry", skillClip: "Block", skillDesc: "F/우클릭: 패링 — 타이밍 맞춰 막으면 주변 적 기절!",
+      skill: "parry", skillClip: "Block", skillDesc: "F: 패링 — 타이밍 맞춰 막으면 주변 적 기절!",
       desc: "빠른 근접 베기. 패링 성공 시 적 기절" },
     mage:   { gltf: gMage,   key: "mage", name: "마법사", role: "원거리·광역", hp: 95, dmg: 26, speed: 6.0, windup: 300, atkInterval: 0.95,
       atkType: "fireball", atkClip: "Spellcast_Shoot", projSpeed: 26, aoe: 3.6,
-      skill: "blink", skillClip: "Spellcast_Raise", skillDesc: "F/우클릭: 블링크 — 순간이동(회피)",
+      skill: "blink", skillClip: "Spellcast_Raise", skillDesc: "F: 블링크 — 순간이동(회피)",
       desc: "파이어볼 광역. 느리지만 강하다(공속↓·딜↑)" },
     archer: { gltf: gRogue,  key: "archer", name: "궁수", role: "원거리·연사", hp: 110, dmg: 13, speed: 7.0, windup: 180, atkInterval: 0.34,
       atkType: "arrow", atkClip: "2H_Ranged_Shoot", projSpeed: 48,
-      skill: "dodge", skillClip: "Dodge_Forward", skillDesc: "F/우클릭: 구르기 — 빠른 회피(무적)",
+      skill: "dodge", skillClip: "Dodge_Forward", skillDesc: "F: 구르기 — 빠른 회피(무적)",
       desc: "화살 빠른 연사(단일). 공속이 빠르다" },
   };
 

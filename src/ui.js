@@ -894,10 +894,11 @@ export const UI = {
 
   // 보스 처치 보상 스킬 모달. choices=[{name,tier,desc,cd}] (최대 3), onPick(i).
   // tier ∈ 'silver'|'gold'|'prism'. 카드 클릭 또는 1·2·3 키 → onPick 후 자동 닫힘.
-  showBossReward(choices, onPick) {
+  showBossReward(choices, onPick, onSkip) {
     if (!el.root || typeof document === "undefined") return;
     const opts = (Array.isArray(choices) ? choices : []).slice(0, 3);
     const pick = typeof onPick === "function" ? onPick : function () {};
+    const skip = typeof onSkip === "function" ? onSkip : null;
     const TIER = { silver: "실버", gold: "골드", prism: "프리즘" };
 
     // 기존 모달 정리 (재호출 안전)
@@ -906,18 +907,20 @@ export const UI = {
     const modal = mk("div", "ui-overlay", el.root); modal.id = "ui-bossreward";
     const title = mk("div", "ui-br-title", modal); title.textContent = "보스 처치! 스킬 획득";
     const sub = mk("div", "ui-br-sub", modal);
-    sub.textContent = "1·2·3 또는 클릭";
+    sub.textContent = skip ? "1·2·3 / 클릭 · 건너뛰기 0" : "1·2·3 또는 클릭";
     const cards = mk("div", "ui-br-cards", modal);
 
     // 보스 처치 직후 연타로 인한 즉시 오선택 방지: 개봉 후 잠깐(450ms)은 선택을 무시한다.
     const openedAt = Date.now();
     const ARM_MS = 450;
+    const armed = () => Date.now() - openedAt >= ARM_MS;
     const choose = (i) => {
-      if (Date.now() - openedAt < ARM_MS) return;
+      if (!armed()) return;
       if (i < 0 || i >= opts.length) return;
       UI.hideBossReward();
       pick(i);
     };
+    const doSkip = () => { if (!skip || !armed()) return; UI.hideBossReward(); skip(); };
 
     opts.forEach((c, i) => {
       c = c || {};
@@ -932,13 +935,21 @@ export const UI = {
       card.addEventListener("click", () => choose(i));
     });
 
-    // 숫자키 1/2/3 선택
+    if (skip) {
+      const skBtn = mk("button", "ui-fc-btn", modal);
+      skBtn.textContent = "건너뛰기 (획득 안 함)";
+      skBtn.style.marginTop = "14px";
+      skBtn.addEventListener("click", doSkip);
+    }
+
+    // 숫자키 1/2/3 선택, 0/Esc 건너뛰기
     bossRewardKeyHandler = (e) => {
       const k = e && (e.key || e.keyCode);
       let i = -1;
       if (k === "1" || k === 49) i = 0;
       else if (k === "2" || k === 50) i = 1;
       else if (k === "3" || k === 51) i = 2;
+      else if (skip && (k === "0" || k === 48 || k === "Escape" || k === 27)) { doSkip(); return; }
       if (i >= 0 && i < opts.length) choose(i);
     };
     if (typeof window !== "undefined" && window.addEventListener) {
