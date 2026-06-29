@@ -327,6 +327,11 @@ function skillUp() { /* 탭형 스킬만 사용(hold 없음) */ }
 function doParry() {
   skillCd = 0.7; parryWindow = 0.4;                  // 0.4초 패링 창
   if (actions[PSTATS.skillClip]) playOnce(PSTATS.skillClip, null);
+  // 패링 자세 연출: 푸른 방패 섬광 + 전방 가드 링(패링 창이 열렸음을 또렷이)
+  const c = player.position.clone().setY(player.position.y + 1.0);
+  spriteFlash(c, TEX.glow, 0x9bd4ff, 0.7, 2.6, 0.4);
+  const f = new THREE.Vector3(Math.sin(player.rotation.y), 0, Math.cos(player.rotation.y));
+  spriteFlash(c.clone().add(f.multiplyScalar(1.2)), TEX.ring, 0x7db4ff, 0.85, 2.8, 0.35, null, 5);
 }
 function doDodge() {
   skillCd = 1.2 * PSTATS.skillCdMult; iframes = 0.45;   // 짧은 무적
@@ -683,6 +688,42 @@ function arrowRain(dmg, radius, count) {
   addShake(0.4);
 }
 
+// 궁수 스킬 공용: 캐릭터가 화살을 '직접 쏜다'(제자리/하늘 메테오 대신 투사체 — 공유 지오메트리라 가볍다).
+// opts: { spread, rapid(연사 시차), elem('ice'|'fire'|'poison'…), aoe(폭발 반경), color, pierce, speed }
+function arrowVolley(count, dmg, opts) {
+  opts = opts || {};
+  const t = world ? world.nearestEnemy(player.position, 46) : null;
+  const o = player.position.clone(); o.y += 1.3;
+  let base;
+  if (t) { const tp = t.obj.position.clone(); tp.y += 1.0; base = tp.sub(o).normalize(); player.rotation.y = Math.atan2(base.x, base.z); }
+  else { const ang = player.rotation.y; base = new THREE.Vector3(Math.sin(ang), 0, Math.cos(ang)); }
+  const spread = opts.spread != null ? opts.spread : 0.12;
+  if (atkAdd) { atkAdd.stop(); atkAdd.reset(); atkAdd.setEffectiveWeight(1); atkAdd.timeScale = 1.4; atkAdd.play(); }
+  spriteFlash(o, TEX.glow, 0xbfeaff, 0.5, 1.7, 0.12);   // 발사 머즐 플래시
+  for (let i = 0; i < count; i++) {
+    const a = (i - (count - 1) / 2) * spread, c = Math.cos(a), s = Math.sin(a);
+    const dir = new THREE.Vector3(base.x * c + base.z * s, base.y, -base.x * s + base.z * c).normalize();
+    const fire = () => { if (!GAME.dead) _pushArrow(player.position.clone().add(new THREE.Vector3(0, 1.3, 0)), dir, dmg, opts); };
+    if (opts.rapid) setTimeout(fire, i * 32); else fire();
+  }
+}
+function _pushArrow(origin, dir, dmg, opts) {
+  origin.addScaledVector(dir, 0.8);
+  const crit = opts.crit != null ? opts.crit : (Math.random() < (PSTATS.critChance || 0.2));
+  const col = opts.color || (crit ? 0xfff0a0 : 0x9fe8ff);
+  const g = new THREE.Group();
+  const shaft = new THREE.Mesh(_arrowGeo, _arrowMat);            // 공유 지오메트리/머티리얼(가벼움)
+  shaft.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir); g.add(shaft);
+  g.add(glowSprite(TEX.glow, col, crit ? 1.4 : 1.1));
+  g.position.copy(origin); scene.add(g);
+  const speed = opts.speed || PSTATS.projSpeed || 48;
+  projectiles.push({ mesh: g, vel: dir.clone().multiplyScalar(speed), dmg, crit, type: "arrow",
+    hitR: 0.85, aoe: opts.aoe || 0, elem: opts.elem || null, life: 2.6, owner: "player",
+    pierce: opts.pierce != null ? opts.pierce : (PSTATS.pierce || 0), hitSet: new Set(),
+    trail: { tex: TEX.glow, color: col, size: 0.8, life: 0.24, rate: 0.009 }, _tacc: 0,
+    li: { c: col, i: 2.2, d: 6, w: 1 } });
+}
+
 // ========== 원소 스킬 VFX (빙결/눈보라/얼음회오리/태풍/시간정지/오라) ==========
 // 시간 지속 파티클 이미터: 매 rate초마다 tick(e) 호출, dur초 후 종료
 const emitters = [];
@@ -923,28 +964,52 @@ function grappleShot(dmg, dist) {
   } });
   addShake(0.35);
 }
-// 기사 검무: 주변 적을 차례로 베며 순간이동·회전(시점 함께 이동), 무적
+// 기사 회전 베기(k_whirl): 제자리에서 고속 회전하며 주위를 베는 광역기. whirlT 동안 모델이 돈다.
+let whirlT = 0;
+function whirlSlash(dmg, radius) {
+  whirlT = 0.55; iframes = Math.max(iframes, 0.15);
+  if (atkAdd) { atkAdd.stop(); atkAdd.reset(); atkAdd.setEffectiveWeight(1); atkAdd.timeScale = 1.2; atkAdd.play(); }
+  const c0 = player.position.clone().setY(player.position.y + 0.4);
+  fxRing(c0, radius, 0xfff0a0); fxRing(c0, radius * 0.62, 0xffd24a);
+  spawnSparks(c0, 0xfff0a0, 18, 11); addShake(0.5);
+  // 데미지: 회전 시작에 광역 1회(밸런스 유지) — 회전 검격은 시각 연출
+  if (world) for (const e of world.enemies.slice()) if (!e.dead && e.obj.position.distanceTo(player.position) < radius + e.def.radius) world.applyDamage(e, dmg, Math.random() < 0.35);
+  let ang = 0;
+  addEmitter({ pos: player.position.clone(), follow: true, dur: 0.55, rate: 0.05, tick: () => {
+    ang += 1.5;
+    const r = radius * 0.72;
+    const sp = player.position.clone().setY(player.position.y + 0.9).add(new THREE.Vector3(Math.sin(ang) * r, 0, Math.cos(ang) * r));
+    spriteFlash(sp, TEX.slash, 0xffffff, 0.55, 2.3, 0.16, null, 10);   // 도는 검격 호
+    spawnSparks(sp, 0xfff0c0, 3, 9);
+  } });
+}
+
+// 기사 검무: 적 주위 여러 구도(측면·배후)로 순간이동하며 베는 무적 난무(시점 함께 이동)
 function bladeDance(dmg, dur, radius) {
   iframes = dur + 0.15;
   addEmitter({ pos: player.position.clone(), dur, rate: 0.13, tick: () => {
     iframes = Math.max(iframes, 0.26);
-    const lim = WORLD * 0.46, t = world && world.nearestEnemy(player.position, 20);
-    if (t) {
-      const dir = t.obj.position.clone().sub(player.position); dir.y = 0;
-      if (dir.lengthSq() < 0.01) dir.set(0, 0, 1); dir.normalize();
-      const step = THREE.MathUtils.clamp(player.position.distanceTo(t.obj.position) - 1.8, 0, 5);
-      const nx = THREE.MathUtils.clamp(player.position.x + dir.x * step, -lim, lim), nz = THREE.MathUtils.clamp(player.position.z + dir.z * step, -lim, lim);
-      player.position.set(nx, terrainHeight(nx, nz), nz); player.rotation.y = Math.atan2(dir.x, dir.z);
-    } else {
-      player.rotation.y += 1.4; const f = new THREE.Vector3(Math.sin(player.rotation.y), 0, Math.cos(player.rotation.y));
-      const nx = THREE.MathUtils.clamp(player.position.x + f.x * 2.6, -lim, lim), nz = THREE.MathUtils.clamp(player.position.z + f.z * 2.6, -lim, lim);
+    const lim = WORLD * 0.46;
+    const from = player.position.clone();
+    // 근처 적을 골라 그 주위 '임의 각도'로 순간이동 → 매번 다른 구도에서 베어 화려하게
+    const cands = world ? world.enemies.filter((e) => !e.dead && e.obj.position.distanceTo(player.position) < 26) : [];
+    if (cands.length) {
+      const t = cands[(Math.random() * cands.length) | 0];
+      const a = Math.random() * Math.PI * 2, off = 1.6 + Math.random() * 0.7;
+      const nx = THREE.MathUtils.clamp(t.obj.position.x + Math.sin(a) * off, -lim, lim);
+      const nz = THREE.MathUtils.clamp(t.obj.position.z + Math.cos(a) * off, -lim, lim);
       player.position.set(nx, terrainHeight(nx, nz), nz);
+      player.rotation.y = Math.atan2(t.obj.position.x - nx, t.obj.position.z - nz);   // 적을 바라봄
+    } else {
+      player.rotation.y += 1.6;   // 적 없으면 제자리 회전 난무
     }
     camReady = false;
+    // 출발→도착 잔상(검광 트레일) + 베기 섬광
+    spawnBolt(from.setY(from.y + 1), player.position.clone().setY(player.position.y + 1), 0xeef3ff);
     const c = player.position.clone().setY(player.position.y + 1);
-    spriteFlash(c, TEX.ring, 0xfff0a0, 1, radius * 2.4, 0.22, null, 7); spawnSparks(c, 0xfff0a0, 8, 9);
-    if (atkAdd) { atkAdd.stop(); atkAdd.reset(); atkAdd.setEffectiveWeight(1); atkAdd.timeScale = 1.6; atkAdd.play(); }
-    for (const en of _enemiesIn(player.position, radius)) world.applyDamage(en, dmg, Math.random() < 0.4);
+    spriteFlash(c, TEX.slash, 0xffffff, 0.6, 2.6, 0.16, null, 11); spawnSparks(c, 0xfff0c0, 9, 11);
+    if (atkAdd) { atkAdd.stop(); atkAdd.reset(); atkAdd.setEffectiveWeight(1); atkAdd.timeScale = 1.7; atkAdd.play(); }
+    if (world) for (const en of _enemiesIn(player.position, radius)) world.applyDamage(en, dmg, Math.random() < 0.4);
   } });
   screenFlash("rgba(255,240,160,0.2)", 0.2, 220); addShake(0.4);
 }
@@ -1050,15 +1115,24 @@ function updateProjectiles(dt) {
         spawnExplosion(p.mesh.position, p.aoe);
         removeProjectile(p, i);
       }
-    } else {                                          // 화살/볼트 — 관통(pierce) 지원
+    } else {                                          // 화살/볼트 — 관통(pierce)/원소(elem)/폭발(aoe) 지원
+      const explode = (at) => {                        // 폭발 화살: 광역 피해 + 원소 + 폭발 연출
+        for (const e2 of enemies.slice()) if (!e2.dead && at.distanceTo(e2.obj.position) < p.aoe + e2.def.radius) { world.applyDamage(e2, p.dmg, p.crit); if (p.elem) _applyElem(e2, p.elem, p.dmg); }
+        spawnExplosion(at, p.aoe);
+      };
+      let done = false;
       for (const e of enemies) {
         if (e.dead || p.hitSet.has(e)) continue;
         if (p.mesh.position.distanceTo(e.obj.position) < p.hitR + e.def.radius) {
-          world.applyDamage(e, p.dmg, p.crit); p.hitSet.add(e);
-          if (p.pierce > 0) p.pierce--; else { removeProjectile(p, i); break; }
+          if (p.aoe > 0) { explode(p.mesh.position.clone()); removeProjectile(p, i); done = true; break; }
+          world.applyDamage(e, p.dmg, p.crit); p.hitSet.add(e); if (p.elem) _applyElem(e, p.elem, p.dmg);
+          if (p.pierce > 0) p.pierce--; else { removeProjectile(p, i); done = true; break; }
         }
       }
-      if (projectiles[i] === p && (onGround || blocked || p.life <= 0)) { removeProjectile(p, i); }
+      if (!done && projectiles[i] === p && (onGround || blocked || p.life <= 0)) {
+        if (p.aoe > 0) explode(p.mesh.position.clone());
+        removeProjectile(p, i);
+      }
     }
   }
   for (let i = fx.length - 1; i >= 0; i--) {
@@ -1238,6 +1312,12 @@ function onPlayerHit(dmg) {
   if (parryWindow > 0) {                            // 패링 성공! 피해 무효 + 주변 적 기절
     parryWindow = 0; iframes = 0.3;
     if (world && world.stunNearby) world.stunNearby(player.position, 6.5, 2.5);
+    // 완벽 방어 임팩트: 흰 섬광 + 충격 링 + 스파크 + 히트스톱 + 화면 섬광
+    const c = player.position.clone().setY(player.position.y + 1.0);
+    spriteFlash(c, TEX.glow, 0xffffff, 1.0, 3.6, 0.22);
+    fxRing(player.position, 6.5, 0x9bd4ff); fxRing(player.position, 3.2, 0xffffff);
+    spawnSparks(c, 0xcfe8ff, 28, 13); addShake(0.7);
+    screenFlash("rgba(180,220,255,0.35)", 0.22, 200); hitstop = Math.max(hitstop, 0.08);
     UI.banner("패링!  적 기절", 900);
     return;
   }
@@ -1399,7 +1479,7 @@ const ACTIVE_SKILLS = [
   { id: "k_guardup", tier: "silver", cls: KNIGHT, name: "수호 강화", desc: "6초간 받는 피해 감소", cd: 16, cast: () => applyBuff(() => { PSTATS.dmgReduce += 0.25; }, () => { PSTATS.dmgReduce -= 0.25; }, 6, 0x66aaff) },
   { id: "k_quake", tier: "gold", cls: KNIGHT, name: "대지 강타", desc: "땅을 찍어 파편+광역 피해·기절", cd: 12, cast: () => groundSmash(9, 45 + LV() * 7) },
   { id: "k_press", tier: "gold", cls: KNIGHT, name: "위압", desc: "강타 + 주변 적 2.2초 기절", cd: 14, cast: () => { groundSmash(8, 20 + LV() * 3); if (world && world.stunNearby) world.stunNearby(player.position, 8, 2.2); } },
-  { id: "k_whirl", tier: "gold", cls: KNIGHT, name: "회전 베기", desc: "넓은 광역 피해", cd: 12, cast: (a) => a.aoe(7.5, 42 + LV() * 6) },
+  { id: "k_whirl", tier: "gold", cls: KNIGHT, name: "회전 베기", desc: "고속 회전하며 주위를 벤다(광역)", cd: 12, cast: () => whirlSlash(42 + LV() * 6, 7.5) },
   { id: "k_shock", tier: "gold", cls: KNIGHT, name: "충격파", desc: "광범위 파동 피해·기절", cd: 13, cast: () => groundSmash(11, 32 + LV() * 5) },
   { id: "k_ward", tier: "gold", cls: KNIGHT, name: "수호 결계", desc: "4초간 피해 무효", cd: 16, cast: (a) => a.shield(4) },
   { id: "k_flameblade", tier: "gold", cls: KNIGHT, name: "화염 검기", desc: "발밑에 화염 장판(지속 피해)", cd: 14, cast: () => dotZone(player.position.clone(), 6, 30 + LV() * 4, 3, 0xff7a2a, "fire") },
@@ -1453,35 +1533,35 @@ const ACTIVE_SKILLS = [
 
   // ═══════ 궁수 전용 30종 (마법진 없음) ═══════
   { id: "a_heal", tier: "silver", cls: ARCHER, name: "응급 치료", desc: "체력 30% 회복", cd: 12, cast: (a) => a.heal(0.30) },
-  { id: "a_frostarrow", tier: "silver", cls: ARCHER, name: "빙결 화살", desc: "주변 적 2초 빙결", cd: 14, cast: (a) => a.frost(7, 2.0, false) },
-  { id: "a_blast", tier: "silver", cls: ARCHER, name: "폭발 화살", desc: "착탄 지점 광역 폭발", cd: 9, cast: (a) => a.aoe(5.5, 26 + LV() * 4, 0xffaa55, "fire") },
+  { id: "a_frostarrow", tier: "silver", cls: ARCHER, name: "빙결 화살", desc: "얼음 화살 3발(명중 시 빙결)", cd: 14, cast: () => arrowVolley(3, 18 + LV() * 3, { elem: "ice", spread: 0.13, color: 0x9fe8ff }) },
+  { id: "a_blast", tier: "silver", cls: ARCHER, name: "폭발 화살", desc: "착탄 시 폭발하는 화살", cd: 9, cast: () => arrowVolley(1, 26 + LV() * 4, { aoe: 5.5, elem: "fire", color: 0xffaa55 }) },
   { id: "a_smoke", tier: "silver", cls: ARCHER, name: "연막탄", desc: "주변 적 1.6초 기절", cd: 12, cast: (a) => a.stun(7, 1.6) },
-  { id: "a_poisonshot", tier: "silver", cls: ARCHER, name: "독 사격", desc: "주변 독 구름 피해", cd: 10, cast: (a) => a.aoe(6, 24 + LV() * 4, 0x7ed957, "poison") },
+  { id: "a_poisonshot", tier: "silver", cls: ARCHER, name: "독 사격", desc: "맹독 화살 3발(중독)", cd: 10, cast: () => arrowVolley(3, 24 + LV() * 4, { elem: "poison", spread: 0.16, color: 0x7ed957 }) },
   { id: "a_scatter", tier: "silver", cls: ARCHER, name: "산탄 사격", desc: "부채꼴 화살 3발", cd: 8, cast: () => scatterShot("arrow", 3, 16 + LV() * 3, 0.18) },
   { id: "a_poisonfog", tier: "silver", cls: ARCHER, name: "독 안개", desc: "지속 독 장판", cd: 12, cast: () => dotZone(TZ(), 6, 24 + LV() * 3, 3, 0x7ed957, "poison") },
   { id: "a_roll", tier: "silver", cls: ARCHER, name: "회피 구르기", desc: "전방 회피 돌진(타격)", cd: 8, cast: () => dashStrike(8, 18 + LV() * 3, 2) },
   { id: "a_focus", tier: "silver", cls: ARCHER, name: "집중", desc: "8초간 치명타 확률 증가", cd: 16, cast: () => applyBuff(() => { PSTATS.critChance += 0.25; }, () => { PSTATS.critChance -= 0.25; }, 8, 0xffe08a) },
   { id: "a_drainarrow", tier: "silver", cls: ARCHER, name: "흡혈 화살", desc: "광역 피해 + 생명 흡수", cd: 11, cast: () => lifeDrain(6, 16 + LV() * 3, 0.4) },
-  { id: "a_rain", tier: "gold", cls: ARCHER, name: "화살 세례", desc: "넓은 지역에 화살 비", cd: 11, cast: () => arrowRain(28 + LV() * 5, 6, 14) },
-  { id: "a_poison", tier: "gold", cls: ARCHER, name: "맹독 살포", desc: "넓은 범위 독 구름 피해", cd: 10, cast: (a) => a.aoe(7, 34 + LV() * 6, 0x7ed957, "poison") },
-  { id: "a_volley", tier: "gold", cls: ARCHER, name: "연발 사격", desc: "다수의 화살을 퍼붓는다", cd: 12, cast: () => arrowRain(22 + LV() * 4, 5, 20) },
+  { id: "a_rain", tier: "gold", cls: ARCHER, name: "화살 세례", desc: "화살을 빠르게 퍼붓는다(14발)", cd: 11, cast: () => arrowVolley(14, 26 + LV() * 5, { spread: 0.11, rapid: true }) },
+  { id: "a_poison", tier: "gold", cls: ARCHER, name: "맹독 살포", desc: "부채꼴 맹독 화살 6발", cd: 10, cast: () => arrowVolley(6, 34 + LV() * 6, { elem: "poison", spread: 0.18, color: 0x7ed957 }) },
+  { id: "a_volley", tier: "gold", cls: ARCHER, name: "연발 사격", desc: "전방으로 화살 20발 연사", cd: 12, cast: () => arrowVolley(20, 20 + LV() * 4, { spread: 0.07, rapid: true }) },
   { id: "a_frostzone", tier: "gold", cls: ARCHER, name: "빙결 지대", desc: "넓은 범위 2.2초 빙결", cd: 14, cast: (a) => a.frost(9, 2.2, false) },
-  { id: "a_barrage", tier: "gold", cls: ARCHER, name: "폭격 화살", desc: "강력한 집중 화살비", cd: 13, cast: () => arrowRain(38 + LV() * 6, 7, 12) },
+  { id: "a_barrage", tier: "gold", cls: ARCHER, name: "폭격 화살", desc: "폭발하는 화살 12발 집중사격", cd: 13, cast: () => arrowVolley(12, 30 + LV() * 5, { spread: 0.06, rapid: true, aoe: 3.0, elem: "fire", color: 0xffaa55 }) },
   { id: "a_cone", tier: "gold", cls: ARCHER, name: "부채꼴 난사", desc: "전방 부채꼴 집중 사격", cd: 11, cast: () => coneStrike(40 + LV() * 6, 16, 0xffe08a) },
   { id: "a_swift", tier: "gold", cls: ARCHER, name: "신속", desc: "8초간 공속·이동 증가", cd: 18, cast: () => applyBuff(() => { PSTATS.atkInterval *= 0.55; WALK *= 1.2; RUN *= 1.2; }, () => { PSTATS.atkInterval /= 0.55; WALK /= 1.2; RUN /= 1.2; }, 8, 0x9fe8ff) },
   { id: "a_multiscatter", tier: "gold", cls: ARCHER, name: "다중 산탄", desc: "부채꼴 화살 5발", cd: 12, cast: () => scatterShot("arrow", 5, 22 + LV() * 4, 0.16) },
   { id: "a_poisonzone", tier: "gold", cls: ARCHER, name: "독 지대", desc: "지속 독 장판(강력)", cd: 13, cast: () => dotZone(TZ(), 7, 30 + LV() * 4, 4, 0x7ed957, "poison") },
   { id: "a_trap", tier: "gold", cls: ARCHER, name: "사냥꾼의 함정", desc: "표식 후 폭발", cd: 14, cast: () => bombDelayed(80 + LV() * 8, 6, 1.0) },
-  { id: "a_storm", tier: "prism", cls: ARCHER, name: "강철 폭풍(태풍)", desc: "태풍이 휘몰아치며 화살 폭풍", cd: 20, cast: () => { typhoon(0, 8, 2.4); arrowRain(45 + LV() * 8, 9, 30); } },
+  { id: "a_storm", tier: "prism", cls: ARCHER, name: "강철 폭풍(태풍)", desc: "태풍 + 화살 폭풍 24발", cd: 20, cast: () => { typhoon(0, 8, 2.4); arrowVolley(24, 40 + LV() * 7, { spread: 0.16, rapid: true }); } },
   { id: "a_rage", tier: "prism", cls: ARCHER, name: "광폭화", desc: "8초간 공격력·공속 폭증", cd: 22, cast: (a) => a.rage(8) },
-  { id: "a_arrowstorm", tier: "prism", cls: ARCHER, name: "화살 폭풍", desc: "초광범위 화살 폭격", cd: 20, cast: () => arrowRain(40 + LV() * 7, 10, 40) },
-  { id: "a_frostgale", tier: "prism", cls: ARCHER, name: "빙결 폭풍", desc: "태풍 + 빙결 화살 폭격", cd: 22, cast: (a) => { typhoon(0, 8, 2.2); a.frost(8, 2.2, false); arrowRain(30 + LV() * 5, 8, 20); } },
-  { id: "a_fullvolley", tier: "prism", cls: ARCHER, name: "일제 사격", desc: "최강 집중 화살 세례", cd: 24, cast: () => arrowRain(55 + LV() * 9, 7, 24) },
+  { id: "a_arrowstorm", tier: "prism", cls: ARCHER, name: "화살 폭풍", desc: "초광범위 화살 폭격 28발", cd: 20, cast: () => arrowVolley(28, 36 + LV() * 6, { spread: 0.14, rapid: true }) },
+  { id: "a_frostgale", tier: "prism", cls: ARCHER, name: "빙결 폭풍", desc: "태풍 + 빙결 화살 16발", cd: 22, cast: () => { typhoon(0, 8, 2.2); arrowVolley(16, 28 + LV() * 5, { elem: "ice", spread: 0.14, rapid: true, color: 0x9fe8ff }); } },
+  { id: "a_fullvolley", tier: "prism", cls: ARCHER, name: "일제 사격", desc: "전방 초집중 화살 20발", cd: 24, cast: () => arrowVolley(20, 50 + LV() * 8, { spread: 0.05, rapid: true, pierce: 2 }) },
   { id: "a_execshot", tier: "prism", cls: ARCHER, name: "처형 사격", desc: "저체력 적 즉결 처형", cd: 18, cast: () => executeNearby(7, 30 + LV() * 5, 0.35) },
   { id: "a_deathrain", tier: "prism", cls: ARCHER, name: "죽음의 비", desc: "거대 독 장판(지속)", cd: 22, cast: () => dotZone(TZ(), 9, 45 + LV() * 6, 4, 0x9ed957, "poison") },
   { id: "a_pierceblast", tier: "prism", cls: ARCHER, name: "관통 폭격", desc: "전방 초강력 관통 사격", cd: 20, cast: () => coneStrike(70 + LV() * 9, 22, 0xfff0a0) },
   { id: "a_bloodstorm", tier: "prism", cls: ARCHER, name: "흡혈 폭풍", desc: "초광역 피해 + 대량 흡수", cd: 24, cast: () => lifeDrain(9, 40 + LV() * 6, 0.5) },
-  { id: "a_eye", tier: "prism", cls: ARCHER, name: "폭풍의 눈", desc: "중력장으로 모은 뒤 화살 세례", cd: 24, cast: () => { gravityWell(8, 2.0, 0); arrowRain(40 + LV() * 6, 7, 24); } },
+  { id: "a_eye", tier: "prism", cls: ARCHER, name: "폭풍의 눈", desc: "중력장으로 모은 뒤 화살 20발 난사", cd: 24, cast: () => { gravityWell(8, 2.0, 0); arrowVolley(20, 36 + LV() * 6, { spread: 0.12, rapid: true }); } },
   { id: "a_grapple", tier: "gold", cls: ARCHER, name: "갈고리 이동사격", desc: "갈고리로 비행하며 화살을 난사", cd: 13, cast: () => grappleShot(16 + LV() * 3, 14) },
   { id: "a_grapplestrike", tier: "prism", cls: ARCHER, name: "강습 사격", desc: "고속 갈고리 비행 + 집중 난사", cd: 18, cast: () => { grappleShot(22 + LV() * 4, 18); } },
 ];
@@ -1552,6 +1632,19 @@ function normScale(obj, targetH) {
   return s;
 }
 
+// #11: 캐릭터 모델에 여러 무기 노드가 동시에 붙어 있어(검 3종·방패 4종·석궁 2종+단검 등) 이상하다.
+// 클래스에 맞는 무기 하나만 보이게 하고 나머지는 숨긴다.
+const WEAPON_NODES = {
+  knight: { all: ["1H_Sword_Offhand", "Badge_Shield", "Rectangle_Shield", "Round_Shield", "Spike_Shield", "1H_Sword", "2H_Sword"], keep: ["1H_Sword", "Round_Shield"] },
+  mage:   { all: ["Spellbook", "Spellbook_open", "1H_Wand", "2H_Staff"], keep: ["2H_Staff"] },
+  archer: { all: ["Knife_Offhand", "1H_Crossbow", "2H_Crossbow", "Knife"], keep: ["2H_Crossbow"] },
+};
+function equipWeapons(model, cls) {
+  const cfg = WEAPON_NODES[cls]; if (!cfg || !model) return;
+  const all = new Set(cfg.all), keep = new Set(cfg.keep);
+  model.traverse((o) => { if (o.name && all.has(o.name)) o.visible = keep.has(o.name); });
+}
+
 // 선택한 캐릭터로 게임 시작 (플레이어 생성 + 월드 + 1층 진입)
 function startGame(c) {
   PSTATS = { dmg: c.dmg, attackWindup: c.windup, atkInterval: c.atkInterval || 0.4, atkType: c.atkType, atkClip: c.atkClip, projSpeed: c.projSpeed || 30, aoe: c.aoe || 0, skill: c.skill, skillClip: c.skillClip,
@@ -1565,6 +1658,7 @@ function startGame(c) {
 
   player = c.gltf.scene;
   player.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.frustumCulled = false; } });
+  equipWeapons(player, c.key || "knight");   // #11: 클래스 무기 하나만 남기고 나머지 숨김
   charScale = normScale(player, 1.8);
   player.scale.setScalar(charScale);
   player.position.set(0, terrainHeight(0, 0), 0);
@@ -1739,14 +1833,16 @@ function update(dt) {
     const targetRot = Math.atan2(tmpDir.x, tmpDir.z);
     let d = targetRot - player.rotation.y;
     while (d > Math.PI) d -= Math.PI * 2; while (d < -Math.PI) d += Math.PI * 2;
-    player.rotation.y += d * Math.min(1, dt * 12);
+    if (whirlT <= 0) player.rotation.y += d * Math.min(1, dt * 12);   // 회전 베기 중엔 회전 연출 우선
   }
+
+  if (whirlT > 0) { whirlT -= dt; player.rotation.y += dt * 20; }     // 회전 베기: 제자리 고속 회전
 
   // 이동 중 카메라 자동 추적: 전진(W 성분) 이동이면 카메라가 캐릭터 등 뒤로 부드럽게 따라온다.
   // 순수 좌우 스트레이프(A/D만)·후진(S)은 시점을 고정해 둔다. 수동 드래그 직후엔 양보(camManualT).
   if (camManualT > 0) camManualT -= dt;
   if (AUTO_FOLLOW_CAM && moving && iz < 0 && camManualT <= 0 &&
-      grappleT <= 0 && dashTime <= 0 && !GAME.dead) {
+      grappleT <= 0 && dashTime <= 0 && whirlT <= 0 && !GAME.dead) {
     let cd = (player.rotation.y + Math.PI) - cam.yaw;   // 캐릭터 등 뒤를 향하도록
     while (cd > Math.PI) cd -= Math.PI * 2; while (cd < -Math.PI) cd += Math.PI * 2;
     cam.yaw += cd * Math.min(1, dt * CAM_FOLLOW_RATE);
